@@ -1,0 +1,14 @@
+# Dados NÃO vão para o Git.
+# FABDEM é CC BY-NC-SA 4.0 — redistribuir tiles no repositório viola a licença.
+dados/
+saidas/
+
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json

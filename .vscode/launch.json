@@ -1,0 +1,47 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "01 · Gerar MDE (FABDEM)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/01_mapa_elevacao.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false
+    },
+    {
+      "name": "02 · Simulador NMRM (Streamlit)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "streamlit",
+      "args": [
+        "run",
+        "${workspaceFolder}/02_simulador_nmrm.py",
+        "--server.headless",
+        "false"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false
+    },
+    {
+      "name": "Teste sintético (sem FABDEM)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/teste_sintetico.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false
+    },
+    {
+      "name": "Arquivo aberto no editor",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false
+    }
+  ]
+}
