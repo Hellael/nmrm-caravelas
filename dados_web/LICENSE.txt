@@ -1,0 +1,20 @@
+DADOS DERIVADOS — Projeto 26.09 (NMRM Caravelas)
+=================================================
+
+Fonte: FABDEM V1-2 (Forest And Buildings removed Copernicus DEM)
+Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C.,
+Neal, J. (2022). A 30 m global map of elevation with forests and
+buildings removed. Environmental Research Letters, 17(2), 024016.
+
+Licenca: Creative Commons Attribution-NonCommercial-ShareAlike 4.0
+         (CC BY-NC-SA 4.0)
+         https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+Os rasters neste diretorio sao produtos derivados do FABDEM V1-2
+(recorte, reamostragem de tipo de dado e processamento de
+conectividade hidraulica). Herdam a mesma licenca: uso nao
+comercial, atribuicao obrigatoria e compartilhamento pela mesma
+licenca.
+
+A licenca do CODIGO deste repositorio e' declarada separadamente
+no LICENSE da raiz.
