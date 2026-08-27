@@ -30,19 +30,28 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
 
 import config
+import src.fonte_dados as fonte
 import src.mapa_web as mapaweb
 import src.slr_core as core
+
+# Resolve a fonte de dados UMA vez: modo local (dados completos em
+# NMRM_DIR_DADOS, flood-fill em tempo real) ou modo web (dados_web/
+# versionado, limiar de conexão pré-computado). Todo o resto do arquivo
+# consome FONTE, nunca config.MDE_PROCESSADO diretamente.
+FONTE = fonte.resolver_fonte()
+MODO_WEB = FONTE["modo"] == fonte.MODO_WEB
 
 # =============================================================================
 # PARÂMETROS DA INTERFACE
 # =============================================================================
 
 CONFIG_UI = {
-    "caminho_padrao":  str(config.MDE_PROCESSADO),  # produto do 01_mapa_elevacao.py
+    "caminho_padrao":  FONTE["dem"],  # local: produto do 01 | web: dados_web/dem_30m_web.tif
     "nmrm_min":        0.0,
     "nmrm_max":        3.0,
     "nmrm_passo":      0.05,
@@ -60,12 +69,21 @@ st.set_page_config(page_title="Simulador NMRM — Caravelas (BA)",
 
 @st.cache_resource(show_spinner="Lendo o MDE FABDEM...")
 def _carregar(caminho: str):
-    return core.carregar_dem(caminho)
+    # carregar_dem_auto cobre os dois formatos: float32 (m) no modo local e
+    # int16 (cm) no modo web. Devolve o MESMO dicionário de core.carregar_dem.
+    return fonte.carregar_dem_auto(caminho)
 
 
 @st.cache_resource(show_spinner="Lendo a máscara de água...")
 def _carregar_mascara_agua(caminho: str):
     return core.carregar_mascara_agua(caminho)
+
+
+@st.cache_resource(show_spinner="Lendo o raster de limiar de conexão...")
+def _carregar_limiar(caminho: str):
+    # Só existe no modo web. No modo local `caminho` é "" e retorna None,
+    # fazendo mascara_inundacao_auto cair no flood-fill em tempo real.
+    return fonte.carregar_limiar(caminho or None)
 
 
 @st.cache_resource(show_spinner="Calculando sombreamento...")
@@ -75,43 +93,99 @@ def _hillshade(caminho: str, exagero: int):
 
 
 @st.cache_data(show_spinner="Gerando overlay do mapa interativo...")
-def _overlay_web(caminho: str, caminho_mascara_agua: str, cota_m: float,
-                 conectividade: bool, semear_bordas: bool, area_min: float,
-                 cores: dict):
+def _overlay_web(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
+                 cota_m: float, conectividade: bool, semear_bordas: bool,
+                 area_min: float, cores: dict):
     """
     Recalcula a máscara de inundação (barato — ndimage.label numa grade de
-    ~5M px) e reprojeta+codifica o PNG (caro — é isso que o cache evita a
-    cada movimento de slider que NÃO muda cota/conectividade/área mínima).
+    ~5M px no modo local, ou consulta O(n) ao raster de limiar no modo web)
+    e reprojeta+codifica o PNG (caro — é isso que o cache evita a cada
+    movimento de slider que NÃO muda cota/conectividade/área mínima).
     """
     d = _carregar(caminho)
     ma = (_carregar_mascara_agua(caminho_mascara_agua)
           if os.path.exists(caminho_mascara_agua) else None)
-    m = core.mascara_inundacao(
-        d["dem"], d["mask_oceano"], cota_m,
+    lm = _carregar_limiar(caminho_limiar) if caminho_limiar else None
+    m = fonte.mascara_inundacao_auto(
+        core, d, cota_m,
         conectividade=conectividade, semear_bordas=semear_bordas,
-        area_pixel_m2=d["area_pixel_m2"], area_minima_ha=area_min,
-        mascara_agua=ma)
+        area_minima_ha=area_min, mascara_agua=ma, limiar=lm)
     classes = mapaweb.classificar_overlay(m, ma if ma is not None else d["mask_oceano"])
     return mapaweb.gerar_overlay_web(classes, d["transform"], d["crs"], cores)
 
 
+# -----------------------------------------------------------------------------
+# core.curva_exposicao e core.tabela_cenarios chamam core.mascara_inundacao
+# internamente e não conhecem o raster de limiar do modo web. Os dois loops
+# abaixo os reimplementam usando fonte.mascara_inundacao_auto, mantendo
+# EXATAMENTE as colunas dos DataFrames originais (a interface e os
+# download_button dependem delas). src/slr_core.py fica intocado.
+# -----------------------------------------------------------------------------
+
+def _mascara_auto(d, ma, lm, cota_m, conectividade, semear_bordas):
+    return fonte.mascara_inundacao_auto(
+        core, d, cota_m, conectividade=conectividade,
+        semear_bordas=semear_bordas, mascara_agua=ma, limiar=lm)
+
+
 @st.cache_data(show_spinner="Rodando a curva de exposição...")
-def _curva(caminho: str, caminho_mascara_agua: str, mare_m: float,
-          conectividade: bool, passo: float):
+def _curva(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
+           mare_m: float, conectividade: bool, semear_bordas: bool, passo: float):
     d = _carregar(caminho)
     ma = (_carregar_mascara_agua(caminho_mascara_agua)
           if os.path.exists(caminho_mascara_agua) else None)
+    lm = _carregar_limiar(caminho_limiar) if caminho_limiar else None
+
     cotas = np.arange(CONFIG_UI["nmrm_min"], CONFIG_UI["nmrm_max"] + 1e-9, passo)
-    return core.curva_exposicao(d, cotas=cotas, mare_m=mare_m,
-                                conectividade=conectividade, mascara_agua=ma)
+    reg = []
+    for nmrm in cotas:
+        c = core.cota_limiar(float(nmrm), mare_m=mare_m)
+        m = _mascara_auto(d, ma, lm, c["cota_m"], conectividade, semear_bordas)
+        e = core.estatisticas_area(m, d["dem"], d["area_pixel_m2"])
+        reg.append({"NMRM (m)": round(float(nmrm), 2),
+                    "Cota (m)": round(c["cota_m"], 2),
+                    "Área inundada (km²)": e["area_inundada_km2"],
+                    "% da área emersa": e["pct_inundada"]})
+    return pd.DataFrame(reg)
 
 
 @st.cache_data(show_spinner="Rodando a matriz de cenários...")
-def _tabela(caminho: str, caminho_mascara_agua: str, mare_m: float, conectividade: bool):
+def _tabela(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
+            mare_m: float, conectividade: bool, semear_bordas: bool):
     d = _carregar(caminho)
     ma = (_carregar_mascara_agua(caminho_mascara_agua)
           if os.path.exists(caminho_mascara_agua) else None)
-    return core.tabela_cenarios(d, mare_m=mare_m, conectividade=conectividade, mascara_agua=ma)
+    lm = _carregar_limiar(caminho_limiar) if caminho_limiar else None
+
+    horizontes = (2050, 2100)
+    percentis = ("mediana", "p83")
+    linhas = []
+    for nome in core.CENARIOS_AR6:
+        for ano in horizontes:
+            for p in percentis:
+                nmrm = core.CENARIOS_AR6[nome][ano][p]
+                c = core.cota_limiar(nmrm, mare_m=mare_m)
+                m = _mascara_auto(d, ma, lm, c["cota_m"], conectividade, semear_bordas)
+                e = core.estatisticas_area(m, d["dem"], d["area_pixel_m2"])
+                linhas.append({
+                    "Cenário": nome, "Horizonte": str(ano), "Percentil": p,
+                    "NMRM (m)": nmrm, "Cota total (m)": round(c["cota_m"], 2),
+                    "Área inundada (km²)": round(e["area_inundada_km2"], 2),
+                    "% da área emersa": round(e["pct_inundada"], 2),
+                    "Depressões isoladas (km²)": round(e["area_isolada_km2"], 2),
+                })
+    for nivel in core.NIVEIS_TURMA:
+        c = core.cota_limiar(nivel, mare_m=mare_m)
+        m = _mascara_auto(d, ma, lm, c["cota_m"], conectividade, semear_bordas)
+        e = core.estatisticas_area(m, d["dem"], d["area_pixel_m2"])
+        linhas.append({
+            "Cenário": "Sensibilidade (turma)", "Horizonte": "—", "Percentil": "—",
+            "NMRM (m)": nivel, "Cota total (m)": round(c["cota_m"], 2),
+            "Área inundada (km²)": round(e["area_inundada_km2"], 2),
+            "% da área emersa": round(e["pct_inundada"], 2),
+            "Depressões isoladas (km²)": round(e["area_isolada_km2"], 2),
+        })
+    return pd.DataFrame(linhas)
 
 
 # =============================================================================
@@ -133,17 +207,27 @@ if not os.path.exists(caminho):
 
 dados = _carregar(caminho)
 
-caminho_mascara_agua = str(config.MASCARA_AGUA)
-if os.path.exists(caminho_mascara_agua):
+caminho_mascara_agua = FONTE["agua"] or ""
+if caminho_mascara_agua and os.path.exists(caminho_mascara_agua):
     mascara_agua = _carregar_mascara_agua(caminho_mascara_agua)
 else:
     mascara_agua = None
     st.sidebar.warning(
-        "Máscara de água (`caravelas_mascara_agua_utm24s_30m.tif`) não encontrada. "
+        "Máscara de água não encontrada. "
         "Caindo para o método antigo de conectividade, que **subestima** a área "
         "conectada ao mar (o oceano já virou nodata no MDE processado). "
         "Rode `01_mapa_elevacao.py` novamente para gerar a máscara.",
         icon="⚠️")
+
+caminho_limiar = FONTE["limiar"] or ""
+limiar = _carregar_limiar(caminho_limiar) if caminho_limiar else None
+
+# O raster de limiar (modo web) só é confiável até um teto de cota. Não deixa
+# o slider de NMRM passar disso — além da grade o resultado congelaria em
+# silêncio (a consulta é `limiar <= cota_cm`).
+_teto_limiar = fonte.cota_maxima_limiar(limiar)
+if _teto_limiar:
+    CONFIG_UI["nmrm_max"] = min(CONFIG_UI["nmrm_max"], _teto_limiar)
 
 st.sidebar.divider()
 
@@ -207,8 +291,11 @@ conectividade = st.sidebar.toggle(
     help="Desligado = 'bathtub' ingênuo, igual aos simuladores online. "
          "Ligado = só conta água que tem caminho até o oceano.")
 semear_bordas = st.sidebar.toggle(
-    "Água pode entrar pelas bordas do recorte", value=True,
-    help="Evita confinamento artificial quando o recorte corta a planície.")
+    "Água pode entrar pelas bordas do recorte",
+    value=True, disabled=MODO_WEB,
+    help=("Fixado na geração dos dados leves — não editável nesta versão."
+          if MODO_WEB else "Evita confinamento artificial quando o "
+          "recorte corta a planície."))
 area_min = st.sidebar.number_input("Área mínima de mancha (ha)", 0.0, 100.0, 0.0, 0.5)
 
 # ---- 4. Cartografia ---------------------------------------------------------
@@ -228,11 +315,10 @@ core.CONFIG_MAPA["alpha_agua"] = st.sidebar.slider("Opacidade da lâmina d'água
 # PROCESSAMENTO
 # =============================================================================
 
-mascaras = core.mascara_inundacao(
-    dados["dem"], dados["mask_oceano"], cota["cota_m"],
+mascaras = fonte.mascara_inundacao_auto(
+    core, dados, cota["cota_m"],
     conectividade=conectividade, semear_bordas=semear_bordas,
-    area_pixel_m2=dados["area_pixel_m2"], area_minima_ha=area_min,
-    mascara_agua=mascara_agua)
+    area_minima_ha=area_min, mascara_agua=mascara_agua, limiar=limiar)
 
 est = core.estatisticas_area(mascaras, dados["dem"], dados["area_pixel_m2"])
 hs = _hillshade(caminho, exagero)
@@ -299,7 +385,7 @@ with aba_mapa_web:
 
     t0 = time.perf_counter()
     png_uri, bounds_web = _overlay_web(
-        caminho, caminho_mascara_agua, cota["cota_m"],
+        caminho, caminho_mascara_agua, caminho_limiar, cota["cota_m"],
         conectividade, semear_bordas, area_min, cores_overlay)
     t_overlay_ms = (time.perf_counter() - t0) * 1000
 
@@ -349,7 +435,8 @@ with aba_curva:
     st.markdown("Área inundada em função do NMRM — a **curva hipsométrica efetiva** "
                 "da planície. Onde ela vira para cima está o limiar em que a "
                 "planície de Caravelas passa a responder de forma não linear.")
-    df_curva = _curva(caminho, caminho_mascara_agua, mare, conectividade, CONFIG_UI["curva_passo"])
+    df_curva = _curva(caminho, caminho_mascara_agua, caminho_limiar, mare,
+                      conectividade, semear_bordas, CONFIG_UI["curva_passo"])
 
     fig2, ax2 = plt.subplots(figsize=(9, 4.5), constrained_layout=True)
     ax2.plot(df_curva["NMRM (m)"], df_curva["Área inundada (km²)"],
@@ -376,7 +463,8 @@ with aba_curva:
 with aba_tabela:
     st.markdown("Matriz cenário × horizonte × percentil, mais os níveis de "
                 "sensibilidade definidos pela turma.")
-    df_tab = _tabela(caminho, caminho_mascara_agua, mare, conectividade)
+    df_tab = _tabela(caminho, caminho_mascara_agua, caminho_limiar, mare,
+                     conectividade, semear_bordas)
     st.dataframe(df_tab, width="stretch", hide_index=True)
     st.download_button("⬇️ Baixar tabela (CSV)",
                        df_tab.to_csv(index=False).encode("utf-8-sig"),
@@ -396,6 +484,16 @@ with aba_meta:
         "datum_vertical": core.CONFIG_DEM["datum_vertical"],
         "area_pixel_m2": dados["area_pixel_m2"],
     })
+
+    st.subheader("Fonte de dados")
+    st.caption(FONTE["rotulo"])
+    _meta_web = FONTE.get("metadados")
+    if _meta_web:
+        st.markdown("**Diagnóstico do recorte (modo web)**")
+        st.json(_meta_web.get("diagnostico_recorte", {}))
+        for _obs in _meta_web.get("observacoes", []):
+            if "TETO" in _obs or "achatado" in _obs:
+                st.warning(_obs, icon="⚠️")
 
     st.subheader("Limitações declaradas")
     st.markdown(
