@@ -16,6 +16,7 @@ Autor: Helio | Assistência: Claude
 from __future__ import annotations
 
 import os
+import sys
 from datetime import datetime
 
 import numpy as np
@@ -78,6 +79,35 @@ CENARIOS_AR6 = {
     },
 }
 
+# -----------------------------------------------------------------------------
+# Procedência dos números acima — regra 3 do projeto (declarar limitações).
+# NADA em CENARIOS_AR6 foi calculado por nós. São valores AVALIADOS pelo IPCC
+# no AR6 WGI, Cap. 9 (Fox-Kemper et al. 2021), Tabela 9.9: mediana e faixa
+# provável (17–83 %) do NMGM, em metros, relativos à linha de base 1995–2014.
+# A ferramenta apenas SOMA esse número à cota e corta o MDE nessa altura.
+# -----------------------------------------------------------------------------
+FONTE_CENARIOS = {
+    "referencia": (
+        "IPCC AR6 WGI, Cap. 9 — Ocean, Cryosphere and Sea Level Change "
+        "(Fox-Kemper et al. 2021), Tabela 9.9. Nível médio GLOBAL do mar "
+        "(NMGM), mediana e faixa provável 17–83 %, base 1995–2014."
+    ),
+    "conferido": (
+        "Conferido contra o Sumário Executivo do Cap. 9 (set/2026): SSP5-8.5 "
+        "= 0,23 [0,20–0,29] m em 2050 e 0,77 [0,63–1,01] m em 2100. Bate com "
+        "os valores desta tabela."
+    ),
+    "a_conferir": (
+        "SSP1-2.6, SSP2-4.5 e SSP5-8.5 baixa confiança ainda NÃO foram "
+        "conferidos linha a linha contra a Tabela 9.9 impressa."
+    ),
+    "substituir_por": (
+        "Valores LOCAIS do grid point de Caravelas no NASA/IPCC AR6 Sea Level "
+        "Projection Tool (Garner et al., Zenodo 10.5281/zenodo.5914709). "
+        "Os daqui são globais: NMGM, não NMRM."
+    ),
+}
+
 # Níveis de sensibilidade definidos pela turma (21/08)
 NIVEIS_TURMA = [0.5, 1.0, 2.0]
 
@@ -96,9 +126,25 @@ NIVEIS_MARE = {
     "HAT":  {"rotulo": "Maior maré astronômica (HAT)",           "offset_m": 0.00},
 }
 
-# Separação entre o geoide EGM2008 (datum do FABDEM) e o nível médio local.
-# Corresponde à topografia dinâmica média (MDT). Ordem de grandeza no
-# Atlântico Sul tropical: dezenas de cm. Preencher com CMEMS/DTU ou nivelamento.
+# -----------------------------------------------------------------------------
+# COMO O "NÍVEL MÉDIO" ENTRA NA CONTA — leia antes de citar o número no relatório.
+#
+# O nível médio NÃO foi calculado por este projeto. Ele é HERDADO do datum
+# vertical do próprio MDE: o FABDEM é referenciado ao geoide EGM2008, e a
+# simulação corta o terreno em z = 0 m nesse datum. Ou seja, a v1 assume
+#
+#       nível médio local  ==  geoide EGM2008        (OFFSET_GEOIDE_NM_M = 0)
+#
+# Essa igualdade é uma APROXIMAÇÃO. A diferença real entre o geoide e a
+# superfície média do mar é a topografia dinâmica média (MDT), sustentada por
+# correntes, vento e gradientes de densidade. No Atlântico Sul tropical ela é
+# de ordem decimétrica — comparável ao próprio NMRM de 2050. Preencher com
+# CMEMS/DTU ou com nivelamento geodésico amarrado ao marégrafo.
+#
+# Consequência prática: a v1 roda "no nível médio" por CONSTRUÇÃO, não por
+# cálculo. Nenhuma constante harmônica foi usada. Os offsets de PM/PMS/HAT em
+# NIVEIS_MARE seguem em 0.00 com PROVISORIO = True justamente por isso.
+# -----------------------------------------------------------------------------
 OFFSET_GEOIDE_NM_M = 0.00
 
 CONFIG_INUNDACAO = {
@@ -107,6 +153,46 @@ CONFIG_INUNDACAO = {
     "conexao_8":       True,   # vizinhança 8 (diagonal) em vez de 4
     "area_minima_ha":  0.0,    # descarta manchas menores que isto (0 = não descarta)
 }
+
+# -----------------------------------------------------------------------------
+# Paletas de tema da figura (v1.2).
+#
+# REGRA: o tema mexe só no "papel" da figura — fundo, título, eixos, grade,
+# créditos. As cores CARTOGRÁFICAS (inundada, isolada, oceano) NÃO mudam:
+# elas carregam significado e precisam ser as mesmas na tela e no relatório.
+# Pelo mesmo motivo, o que é desenhado DENTRO do mapa (seta norte, barra de
+# escala, legenda) fica preto sobre caixa clara nos dois temas — quem dá o
+# contraste ali é o terreno, não o tema.
+# -----------------------------------------------------------------------------
+CONFIG_TEMA = {
+    "claro": {
+        "fundo_figura":   "#FFFFFF",
+        "texto":          "#1A1A1A",
+        "texto_fraco":    "#555555",
+        "borda":          "#333333",
+        "grade":          "#B0B0B0",
+        "hillshade_vmin": 0.0,
+        "hillshade_vmax": 1.0,
+    },
+    "escuro": {
+        # Preto azulado, na linha do modo "dim" das redes sociais.
+        "fundo_figura":   "#0B1220",
+        "texto":          "#E7E9EA",
+        "texto_fraco":    "#8B98A5",
+        "borda":          "#38444D",
+        "grade":          "#38444D",
+        # Cinza comprimido: sem isto o hillshade vira um continente branco
+        # estourado no meio de uma página preta.
+        "hillshade_vmin": 0.05,
+        "hillshade_vmax": 1.90,
+    },
+}
+
+
+def paleta(tema: str = "claro") -> dict:
+    """Paleta de 'papel' da figura. Nome desconhecido cai no claro."""
+    return CONFIG_TEMA.get(tema, CONFIG_TEMA["claro"])
+
 
 CONFIG_MAPA = {
     "exagero_vertical": 50,          # planície de Caravelas é extremamente plana
@@ -119,6 +205,31 @@ CONFIG_MAPA = {
     "alpha_agua":       0.62,
     "dpi_export":       300,
 }
+
+
+# =============================================================================
+# 1.c PRINT DIAGNÓSTICO À PROVA DE CONSOLE LEGADO
+# =============================================================================
+
+def _print(msg: str) -> None:
+    """
+    Substitui `print` em todo o motor.
+
+    No Windows o console roda em cp1252 e estoura UnicodeEncodeError em
+    qualquer caractere fora dessa tabela — a seta de "Geoide → NM local", por
+    exemplo. Print de diagnóstico não pode derrubar a simulação, então aqui
+    ele degrada para '?' em vez de levantar exceção.
+
+    `config.configurar_console()` resolve na origem (stdout em UTF-8); esta
+    função é a rede de segurança para quem importar o motor sem passar pelo
+    config — notebook, teste, outro projeto.
+    """
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        codificacao = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(msg.encode(codificacao, errors="replace")
+                 .decode(codificacao, errors="replace"))
 
 
 # =============================================================================
@@ -158,15 +269,15 @@ def carregar_dem(caminho: str) -> dict:
     area_pixel = res_x * res_y
 
     n_terra = int(np.isfinite(dem).sum())
-    print(f"[DEM] {os.path.basename(caminho)} | {dem.shape[0]}x{dem.shape[1]} px "
+    _print(f"[DEM] {os.path.basename(caminho)} | {dem.shape[0]}x{dem.shape[1]} px "
           f"| res={res_x:.1f}x{res_y:.1f} m | CRS={crs.to_string() if crs else 'indefinido'}")
-    print(f"[DEM] terra={n_terra} px ({n_terra * area_pixel / 1e6:.1f} km²) | "
+    _print(f"[DEM] terra={n_terra} px ({n_terra * area_pixel / 1e6:.1f} km²) | "
           f"oceano={int(mask_oceano.sum())} px | "
           f"z: min={np.nanmin(dem):.2f} m | mediana={np.nanmedian(dem):.2f} m | "
           f"max={np.nanmax(dem):.2f} m")
 
     if crs is not None and crs.to_epsg() != CONFIG_DEM["epsg_projetado"]:
-        print(f"[AVISO] CRS != EPSG:{CONFIG_DEM['epsg_projetado']}. "
+        _print(f"[AVISO] CRS != EPSG:{CONFIG_DEM['epsg_projetado']}. "
               f"Áreas em km² podem estar distorcidas.")
 
     return {
@@ -196,7 +307,7 @@ def carregar_mascara_agua(caminho: str) -> np.ndarray | None:
         return None
     with rasterio.open(caminho) as src:
         mascara = src.read(1).astype(bool)
-    print(f"[MASCARA_AGUA] {os.path.basename(caminho)} | {int(mascara.sum())} px de água")
+    _print(f"[MASCARA_AGUA] {os.path.basename(caminho)} | {int(mascara.sum())} px de água")
     return mascara
 
 
@@ -223,7 +334,7 @@ def cota_limiar(nmrm_m: float,
         "Sobrelevação":           float(sobrelevacao_m),
         "COTA TOTAL":             cota,
     }
-    print("[COTA] " + " + ".join(
+    _print("[COTA] " + " + ".join(
         f"{k}={v:+.2f}" for k, v in parcelas.items() if k != "COTA TOTAL"
     ) + f" => {cota:.2f} m")
     return {"cota_m": cota, "parcelas": parcelas}
@@ -276,7 +387,7 @@ def mascara_inundacao(dem: np.ndarray,
     if not conectividade:
         inundada = abaixo
         isolada = np.zeros_like(abaixo)
-        print(f"[MASCARA] modo=bathtub | cota={cota_m:.2f} m | "
+        _print(f"[MASCARA] modo=bathtub | cota={cota_m:.2f} m | "
               f"abaixo={int(abaixo.sum())} px (sem teste de conectividade)")
         return _empacota_mascaras(inundada, isolada, abaixo, area_pixel_m2)
 
@@ -287,7 +398,7 @@ def mascara_inundacao(dem: np.ndarray,
         agua = mascara_agua.astype(bool)
     else:
         agua = mask_oceano
-        print("[MASCARA] aviso: mascara_agua ausente, caindo para mask_oceano "
+        _print("[MASCARA] aviso: mascara_agua ausente, caindo para mask_oceano "
               "recomputado do MDE (dem==0.0) — SUBESTIMA a conectividade real, "
               "pois o oceano já vira nodata no MDE_PROCESSADO. Rode "
               "01_mapa_elevacao.py de novo para gerar caravelas_mascara_agua_*.tif.")
@@ -332,7 +443,7 @@ def mascara_inundacao(dem: np.ndarray,
         inundada = _remove_manchas_pequenas(inundada, estrutura, n_min)
         isolada = _remove_manchas_pequenas(isolada, estrutura, n_min)
 
-    print(f"[MASCARA] modo=conectado ({'mascara_agua' if usa_mascara_agua else 'mask_oceano (fallback)'}) "
+    _print(f"[MASCARA] modo=conectado ({'mascara_agua' if usa_mascara_agua else 'mask_oceano (fallback)'}) "
           f"| cota={cota_m:.2f} m | manchas={n_rot} | conectadas={len(rot_conectados)} | "
           f"inundada={int(inundada.sum())} px | isolada={int(isolada.sum())} px")
 
@@ -382,7 +493,7 @@ def estatisticas_area(mascaras: dict, dem: np.ndarray, area_pixel_m2: float) -> 
         "pct_isolada":           100.0 * area_isol / area_terra if area_terra else np.nan,
         "superestimativa_bathtub_km2": area_bath - area_inund,
     }
-    print(f"[AREA] terra={area_terra:.1f} km² | inundada={area_inund:.1f} km² "
+    _print(f"[AREA] terra={area_terra:.1f} km² | inundada={area_inund:.1f} km² "
           f"({est['pct_inundada']:.1f}%) | isolada={area_isol:.1f} km² | "
           f"bathtub ingênuo superestima em {est['superestimativa_bathtub_km2']:.1f} km²")
     return est
@@ -500,7 +611,7 @@ def exportar_geotiff(mascaras: dict, dados_dem: dict, caminho_saida: str,
             classes="0=terra 1=inundada 2=depressao_isolada 3=oceano_atual",
             gerado_em=datetime.now().isoformat(timespec="seconds"),
         )
-    print(f"[EXPORT] GeoTIFF salvo: {caminho_saida}")
+    _print(f"[EXPORT] GeoTIFF salvo: {caminho_saida}")
     return caminho_saida
 
 
@@ -508,7 +619,7 @@ def exportar_tabela(df: pd.DataFrame, prefixo: str, pasta: str = "saidas") -> st
     os.makedirs(pasta, exist_ok=True)
     caminho = os.path.join(pasta, f"{prefixo}_{_carimbo()}.csv")
     df.to_csv(caminho, index=False, encoding="utf-8-sig")
-    print(f"[EXPORT] CSV salvo: {caminho}")
+    _print(f"[EXPORT] CSV salvo: {caminho}")
     return caminho
 
 
@@ -546,12 +657,14 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
                 mostrar_isoladas: bool = True,
                 fundo: str = "hipsometrico",
                 hs: np.ndarray = None,
+                tema: str = "claro",
                 figsize=(11, 9)):
     """
     Monta a figura de relatório: hillshade + hipsometria + lâmina d'água,
     com legenda, barra de escala, seta norte e créditos de fonte.
 
     `fundo`: "hipsometrico" | "hillshade" | "limpo"
+    `tema`:  "claro" | "escuro" — muda só o papel da figura (ver CONFIG_TEMA).
     `hs`: sombreamento pré-calculado (evita recomputar a cada movimento
           do slider na interface; use `hillshade()` uma única vez).
 
@@ -564,7 +677,10 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
     res = dados_dem["res_x"]
     hs = hillshade(dem, res) if hs is None else hs
 
+    pal = paleta(tema)
+
     fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
+    fig.patch.set_facecolor(pal["fundo_figura"])
     ax.set_facecolor(CONFIG_MAPA["cor_oceano"])
 
     if fundo == "hipsometrico":
@@ -577,9 +693,13 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
         ax.imshow(rgb, interpolation="nearest")
         mapa_cores = cm.ScalarMappable(norm=norm, cmap=CONFIG_MAPA["cmap_topo"])
         cb = fig.colorbar(mapa_cores, ax=ax, shrink=0.62, pad=0.01)
-        cb.set_label(f"Elevação (m, {CONFIG_DEM['datum_vertical']})", fontsize=9)
+        cb.set_label(f"Elevação (m, {CONFIG_DEM['datum_vertical']})", fontsize=9,
+                     color=pal["texto"])
+        cb.ax.tick_params(colors=pal["texto_fraco"])
+        cb.outline.set_edgecolor(pal["borda"])
     elif fundo == "hillshade":
         ax.imshow(np.where(np.isfinite(dem), hs, np.nan), cmap="gray",
+                  vmin=pal["hillshade_vmin"], vmax=pal["hillshade_vmax"],
                   interpolation="nearest")
 
     # Lâmina d'água conectada
@@ -595,11 +715,13 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
     ax.set_xticks([]); ax.set_yticks([])
     for s in ax.spines.values():
         s.set_linewidth(0.8)
+        s.set_color(pal["borda"])
 
-    ax.set_title(titulo, fontsize=13, weight="bold", loc="left", pad=24)
+    ax.set_title(titulo, fontsize=13, weight="bold", loc="left", pad=24,
+                 color=pal["texto"])
     if subtitulo:
         ax.text(0, 1.010, subtitulo, transform=ax.transAxes, fontsize=9,
-                va="bottom", color="#444444")
+                va="bottom", color=pal["texto_fraco"])
 
     # Seta norte (raster já está em UTM, norte = topo)
     ax.annotate("N", xy=(0.965, 0.955), xytext=(0.965, 0.875),
@@ -621,7 +743,7 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
                 f"cota = {cota['cota_m']:.2f} m\n"
                 f"Cenários: IPCC AR6 WGI Cap. 9 · Exposição potencial, não previsão de inundação real.")
     ax.text(0, -0.028, creditos, transform=ax.transAxes, fontsize=7,
-            va="top", color="#555555")
+            va="top", color=pal["texto_fraco"])
 
     return fig, ax
 
@@ -630,6 +752,9 @@ def salvar_figura(fig, prefixo: str, pasta: str = "saidas", dpi: int = None) -> 
     os.makedirs(pasta, exist_ok=True)
     dpi = CONFIG_MAPA["dpi_export"] if dpi is None else dpi
     caminho = os.path.join(pasta, f"{prefixo}_{_carimbo()}.png")
-    fig.savefig(caminho, dpi=dpi, bbox_inches="tight", facecolor="white")
-    print(f"[EXPORT] Figura salva: {caminho} ({dpi} dpi)")
+    # Respeita o tema com que a figura foi montada — gravar sempre em branco
+    # deixaria um retângulo branco em volta de um mapa de fundo escuro.
+    fig.savefig(caminho, dpi=dpi, bbox_inches="tight",
+                facecolor=fig.get_facecolor())
+    _print(f"[EXPORT] Figura salva: {caminho} ({dpi} dpi)")
     return caminho

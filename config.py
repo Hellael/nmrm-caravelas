@@ -8,6 +8,36 @@ definidos. Todo script importa daqui. Nunca duplicar constante.
 
 from pathlib import Path
 import os
+import sys
+
+
+# =============================================================================
+# CONSOLE
+# =============================================================================
+
+def configurar_console() -> None:
+    """
+    Força stdout/stderr em UTF-8.
+
+    Motivo: no Windows o console herda cp1252, e QUALQUER caractere fora dessa
+    tabela derruba o script inteiro com UnicodeEncodeError no meio de um
+    `print` de diagnóstico — seta (→), delta (Δ), quase-igual (≈). Um print
+    de diagnóstico nunca pode matar a simulação.
+
+    `errors="replace"` é a rede de segurança: em terminal que não renderiza o
+    glifo, ele vira '?' em vez de exceção. Chamada no import deste módulo, que
+    é o primeiro import de todo script do projeto.
+    """
+    for fluxo in (sys.stdout, sys.stderr):
+        try:
+            fluxo.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            # Streamlit Cloud, notebook ou stream já fechado: segue o baile.
+            # A rede de segurança de slr_core._print cobre o resto.
+            pass
+
+
+configurar_console()
 
 # =============================================================================
 # CAMINHOS

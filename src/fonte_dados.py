@@ -41,6 +41,9 @@ CONFIG_FONTE = {
     "arq_limiar_web": "limiar_conexao_web.tif",
     "arq_meta_web": "metadados_web.json",
 
+    # Variável de ambiente que força o modo, ignorando a autodetecção.
+    "env_modo": "NMRM_MODO",
+
     "fator_escala_cm": 100.0,   # int16 (cm) -> float (m)
     "nunca_alaga": 32767,       # sentinela do raster de limiar
     "valor_oceano": 0.0,        # FABDEM: oceano == 0.0 exato
@@ -69,8 +72,27 @@ def resolver_fonte(raiz_repo: str | Path = None) -> dict:
     """
     raiz = Path(raiz_repo) if raiz_repo else Path(__file__).resolve().parent.parent
 
+    # --- Tentativa 0: modo forçado por variável de ambiente ------------------
+    # NMRM_MODO=web faz o resolvedor IGNORAR os dados completos e usar
+    # dados_web/, mesmo com o MDE local presente. Serve para pré-visualizar,
+    # na própria máquina, exatamente a ferramenta que vai ao ar: mesmo raster
+    # leve, mesmo limiar pré-computado, mesmos controles bloqueados.
+    # NMRM_MODO=local é o comportamento padrão, explicitado.
+    #   PowerShell:  $env:NMRM_MODO = "web"   (limpar: Remove-Item Env:NMRM_MODO)
+    #   bash:        NMRM_MODO=web streamlit run 02_simulador_nmrm.py
+    forcado = os.environ.get(CONFIG_FONTE["env_modo"], "").strip().lower()
+    if forcado and forcado not in (MODO_LOCAL, MODO_WEB):
+        print(f"[FONTE] {CONFIG_FONTE['env_modo']}={forcado!r} não reconhecido "
+              f"(use {MODO_LOCAL!r} ou {MODO_WEB!r}). Ignorando.")
+        forcado = ""
+    if forcado == MODO_WEB:
+        print(f"[FONTE] {CONFIG_FONTE['env_modo']}=web — pulando os dados "
+              "completos e usando dados_web/ (pré-visualização do modo público).")
+
     # --- Tentativa 1: modo local via config.py ------------------------------
     try:
+        if forcado == MODO_WEB:
+            raise ImportError("modo web forçado por NMRM_MODO")
         import config
         dem_local = Path(str(config.MDE_PROCESSADO))
         agua_local = Path(str(config.MASCARA_AGUA))
@@ -83,9 +105,14 @@ def resolver_fonte(raiz_repo: str | Path = None) -> dict:
                 "limiar": None,
                 "metadados": None,
                 "rotulo": "Dados completos (30 m, float32) — flood-fill em tempo real",
+                "forcado": False,
             }
     except (ImportError, AttributeError) as e:
-        print(f"[FONTE] config.py indisponível ou incompleto ({e}). Tentando modo web.")
+        # O ImportError acima é controle de fluxo quando o modo web foi
+        # forçado — nesse caso o config.py está ótimo e não há o que avisar.
+        if forcado != MODO_WEB:
+            print(f"[FONTE] config.py indisponível ou incompleto ({e}). "
+                  "Tentando modo web.")
 
     # --- Tentativa 2: modo web ----------------------------------------------
     dir_web = raiz / CONFIG_FONTE["subdir_web"]
@@ -120,6 +147,9 @@ def resolver_fonte(raiz_repo: str | Path = None) -> dict:
         "limiar": str(limiar_web) if limiar_web.exists() else None,
         "metadados": meta,
         "rotulo": rot,
+        # True = o modo web foi pedido à mão, não deduzido da ausência de dados.
+        # A interface usa isto para avisar que é pré-visualização.
+        "forcado": forcado == MODO_WEB,
     }
 
 
@@ -326,7 +356,9 @@ def validar_limiar(core, dados_dem: dict, mascara_agua: np.ndarray,
     conectividade (4 x 8) entre 03_prepara_dem_web.py e CONFIG_INUNDACAO.
     """
     a = dados_dem["area_pixel_m2"] / 1e6
-    print("\n  Cota (m) | Flood-fill (km²) | Limiar (km²) | Δ (km²)")
+    # "dif" em vez de Δ: esta função é de diagnóstico e roda em console
+    # Windows, que não codifica o glifo grego em cp1252.
+    print("\n  Cota (m) | Flood-fill (km²) | Limiar (km²) | dif (km²)")
     print("  " + "-" * 52)
     for cota in cotas:
         ref = core.mascara_inundacao(

@@ -1,5 +1,12 @@
 [server]
 maxUploadSize = 5
 
+# Tema da APLICAÇÃO (v1.2). O tema das FIGURAS é controlado à parte, pelo
+# toggle "Tema escuro nas figuras" na barra lateral — ver CONFIG_TEMA em
+# src/slr_core.py. Paleta preto azulado, no estilo "dim".
 [theme]
-base = "light"
+base = "dark"
+primaryColor = "#1D9BF0"            # azul de destaque (sliders, links, foco)
+backgroundColor = "#0B1220"         # fundo principal — preto azulado
+secondaryBackgroundColor = "#15202B" # barra lateral, cards, tabelas
+textColor = "#E7E9EA"

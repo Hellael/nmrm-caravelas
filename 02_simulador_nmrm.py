@@ -53,9 +53,18 @@ MODO_WEB = FONTE["modo"] == fonte.MODO_WEB
 CONFIG_UI = {
     "caminho_padrao":  FONTE["dem"],  # local: produto do 01 | web: dados_web/dem_30m_web.tif
     "nmrm_min":        0.0,
-    "nmrm_max":        3.0,
+    "nmrm_max":        3.0,       # teto dos modos guiados e da curva de exposição
+    # v1.2 — o modo Manual passa a ir além dos cenários AR6. Serve para teste
+    # de sensibilidade do terreno e para comparar com os paleoníveis
+    # holocênicos da própria planície (Andrade et al. 2003: +4,8 / +3,5 / +2,5 m).
+    # O teto real é recalculado adiante contra o raster de limiar e o clamp
+    # do MDE leve — este valor é só o desejado.
+    "nmrm_max_manual": 10.0,
+    "nmrm_aviso_extrapolacao": 3.0,   # acima disto a interface avisa que saiu da faixa AR6
+    "fracao_segura_clamp": 0.75,      # não chegar perto do teto artificial do MDE web
     "nmrm_passo":      0.05,
-    "curva_passo":     0.10,
+    "curva_passo":     0.10,      # passo fino da curva, até nmrm_max
+    "curva_passo_extra": 0.25,    # passo grosso acima de nmrm_max (casa com o limiar web)
     "figsize":         (10, 8),
 }
 
@@ -130,13 +139,24 @@ def _mascara_auto(d, ma, lm, cota_m, conectividade, semear_bordas):
 
 @st.cache_data(show_spinner="Rodando a curva de exposição...")
 def _curva(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
-           mare_m: float, conectividade: bool, semear_bordas: bool, passo: float):
+           mare_m: float, conectividade: bool, semear_bordas: bool, passo: float,
+           topo: float = None):
     d = _carregar(caminho)
     ma = (_carregar_mascara_agua(caminho_mascara_agua)
           if os.path.exists(caminho_mascara_agua) else None)
     lm = _carregar_limiar(caminho_limiar) if caminho_limiar else None
 
     cotas = np.arange(CONFIG_UI["nmrm_min"], CONFIG_UI["nmrm_max"] + 1e-9, passo)
+
+    # v1.2 — se o modo Manual pediu um NMRM acima do teto normal da curva,
+    # estende o eixo até lá com passo GROSSO. Motivo: no modo local cada ponto
+    # é um flood-fill inteiro, então não dá para manter 10 cm até 10 m; e no
+    # modo web 0,25 m é exatamente o passo do raster de limiar acima de 5,5 m,
+    # ou seja, passo mais fino ali não traria informação nova.
+    if topo and topo > CONFIG_UI["nmrm_max"]:
+        extra = np.arange(CONFIG_UI["nmrm_max"] + CONFIG_UI["curva_passo_extra"],
+                          topo + 1e-9, CONFIG_UI["curva_passo_extra"])
+        cotas = np.concatenate([cotas, extra])
     reg = []
     for nmrm in cotas:
         c = core.cota_limiar(float(nmrm), mare_m=mare_m)
@@ -194,11 +214,27 @@ def _tabela(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
 
 st.sidebar.title("Parâmetros")
 
-caminho = st.sidebar.text_input(
-    "MDE (GeoTIFF do script 01)",
-    value=CONFIG_UI["caminho_padrao"],
-    help="Saída do 01_mapa_elevacao.py: FABDEM recortado, EPSG:31984, 30 m.",
-)
+if FONTE.get("forcado"):
+    # Sem esta tarja é fácil olhar a tela, ver os controles bloqueados e achar
+    # que o modo local quebrou. Aqui o bloqueio é o objetivo.
+    st.sidebar.warning(
+        "**Pré-visualização do modo público.** `NMRM_MODO=web` está ligado: "
+        "rodando com os dados leves de `dados_web/` e com os controles da "
+        "ferramenta pública. Limpe a variável de ambiente para voltar ao "
+        "modo local.", icon="👁️")
+
+# v1.2 — o campo de caminho só faz sentido no modo local, onde o usuário é
+# quem gerou o MDE com o 01_mapa_elevacao.py. No modo web o raster é o
+# dados_web/ versionado junto com o app: expor o caminho só cria um controle
+# que não leva a lugar nenhum e um jeito fácil de quebrar a página.
+if MODO_WEB:
+    caminho = CONFIG_UI["caminho_padrao"]
+else:
+    caminho = st.sidebar.text_input(
+        "MDE (GeoTIFF do script 01)",
+        value=CONFIG_UI["caminho_padrao"],
+        help="Saída do 01_mapa_elevacao.py: FABDEM recortado, EPSG:31984, 30 m.",
+    )
 
 if not os.path.exists(caminho):
     st.error(f"MDE não encontrado em `{caminho}`. "
@@ -229,14 +265,55 @@ _teto_limiar = fonte.cota_maxima_limiar(limiar)
 if _teto_limiar:
     CONFIG_UI["nmrm_max"] = min(CONFIG_UI["nmrm_max"], _teto_limiar)
 
+# ---- v1.2: teto do modo Manual ---------------------------------------------
+# Duas restrições independentes:
+#   (a) raster de limiar — mesma lógica acima;
+#   (b) CLAMP do MDE leve — no modo web todo terreno acima de `clamp_m` foi
+#       achatado nesse valor. Perto do teto o platô inteiro alaga de uma vez e
+#       o número deixa de ter sentido físico, então paramos bem antes dele.
+_meta_fonte = FONTE.get("metadados") or {}
+_cfg_web = _meta_fonte.get("config", {})
+_clamp_web = _cfg_web.get("clamp_m")
+_troca_passo_web = _cfg_web.get("limiar_troca_passo_m")
+_passo_grosso_web = _cfg_web.get("limiar_passo_grosso_cm")
+
+_teto_manual = CONFIG_UI["nmrm_max_manual"]
+if _teto_limiar:
+    _teto_manual = min(_teto_manual, _teto_limiar)
+if _clamp_web:
+    _teto_manual = min(_teto_manual,
+                       CONFIG_UI["fracao_segura_clamp"] * float(_clamp_web))
+# O max() final garante que o slider nunca receba min > max. Ele TEM
+# prioridade sobre a fração de segurança do clamp: se algum dia `nmrm_max`
+# passar de 0,75 * clamp_m, o teto do Manual acompanha `nmrm_max`, não o
+# clamp. Hoje isso não acontece (clamp 20 m -> 15 m seguros contra 3 m de
+# nmrm_max); quem mexer em `clamp_m` precisa reavaliar esta linha.
+CONFIG_UI["nmrm_max_manual"] = round(max(_teto_manual, CONFIG_UI["nmrm_max"]), 2)
+
+# Maior valor que o próprio AR6 projeta para 2100 (p83 do cenário de baixa
+# confiança). Serve de referência para avisar quando o usuário extrapola.
+NMRM_MAX_AR6 = max(c[2100]["p83"] for c in core.CENARIOS_AR6.values())
+
 st.sidebar.divider()
 
 # ---- 1. Cenário -------------------------------------------------------------
 st.sidebar.subheader("1 · Cenário de NMRM")
 
-modo = st.sidebar.radio("Origem do valor",
-                        ["Cenário IPCC AR6", "Níveis da turma", "Manual"],
-                        horizontal=False)
+# v1.2 — na ferramenta pública o cenário IPCC AR6 sai do seletor.
+# Motivo (regra 1 do projeto): os valores de CENARIOS_AR6 são NMGM, o nível
+# médio GLOBAL. A disciplina pede NMRM local de Caravelas, que só sai do
+# NASA/IPCC AR6 Sea Level Projection Tool. Enquanto essa substituição não
+# acontece, oferecer "Cenário IPCC AR6" ao público é entregar um número
+# global rotulado como se fosse local. Os níveis da turma e o modo Manual
+# não têm esse problema: são cotas declaradas, não projeções.
+# No modo local o seletor segue completo, para o desenvolvimento continuar.
+MODOS_CENARIO = ["Cenário IPCC AR6", "Níveis da turma", "Manual"]
+_modos_disponiveis = MODOS_CENARIO[1:] if MODO_WEB else MODOS_CENARIO
+
+modo = st.sidebar.radio("Origem do valor", _modos_disponiveis, horizontal=False)
+
+if MODO_WEB:
+    st.sidebar.info("Cenários IPCC AR6 em desenvolvimento.", icon="🛠️")
 
 if modo == "Cenário IPCC AR6":
     nome_cen = st.sidebar.selectbox(
@@ -257,25 +334,62 @@ elif modo == "Níveis da turma":
     rotulo_cen = f"Sensibilidade espacial +{nmrm:.1f} m"
 
 else:
-    nmrm = st.sidebar.slider("NMRM (m)", CONFIG_UI["nmrm_min"], CONFIG_UI["nmrm_max"],
-                             1.0, CONFIG_UI["nmrm_passo"])
+    nmrm = st.sidebar.slider(
+        "NMRM (m)", CONFIG_UI["nmrm_min"], CONFIG_UI["nmrm_max_manual"],
+        1.0, CONFIG_UI["nmrm_passo"],
+        help=(f"Modo livre até +{CONFIG_UI['nmrm_max_manual']:.1f} m. "
+              f"Acima de +{CONFIG_UI['nmrm_aviso_extrapolacao']:.0f} m a simulação sai "
+              "da faixa projetada pelo AR6 e passa a valer como teste de "
+              "sensibilidade do terreno ou comparação com paleoníveis."))
     rotulo_cen = f"Manual +{nmrm:.2f} m"
+
+    if nmrm > CONFIG_UI["nmrm_aviso_extrapolacao"]:
+        st.sidebar.warning(
+            f"**+{nmrm:.2f} m está fora da faixa do AR6.** O valor mais alto "
+            f"projetado para 2100 é +{NMRM_MAX_AR6:.2f} m (SSP5-8.5 de baixa "
+            "confiança, percentil 83). Acima disso o mapa é um teste de "
+            "sensibilidade da planície — não um cenário climático. Para "
+            "referência, os paleoníveis holocênicos de Caravelas "
+            "(Andrade et al. 2003) chegam a +4,8 m.",
+            icon="⚠️")
+
+    if MODO_WEB and _troca_passo_web and _passo_grosso_web and nmrm > _troca_passo_web:
+        st.sidebar.caption(
+            f"Modo web: acima de +{_troca_passo_web:.1f} m a conectividade foi "
+            f"pré-computada de {_passo_grosso_web:.0f} em {_passo_grosso_web:.0f} cm. "
+            "Cotas dentro do mesmo degrau devolvem o mesmo mapa.")
 
 # ---- 2. Maré e sobrelevação -------------------------------------------------
 st.sidebar.subheader("2 · Empilhamento de maré")
 
 chaves_mare = [k for k in core.NIVEIS_MARE if k != "PROVISORIO"]
-chave_mare = st.sidebar.selectbox(
-    "Datum de referência", chaves_mare,
-    format_func=lambda k: core.NIVEIS_MARE[k]["rotulo"])
-mare = core.NIVEIS_MARE[chave_mare]["offset_m"]
 
-if core.NIVEIS_MARE["PROVISORIO"]:
-    st.sidebar.warning(
-        "Datums de maré ainda **provisórios (0,00 m)**. "
-        "Preencher `NIVEIS_MARE` em `slr_core.py` com as constantes "
-        "harmônicas do BNDO/CHM ou com a estação Caravelas do catálogo FEMAR.",
-        icon="⚠️")
+if MODO_WEB:
+    # v1.2 — ferramenta pública: a maré fica TRAVADA no nível médio.
+    # Os demais datums continuam visíveis (o usuário precisa saber que existem
+    # e que estão no roadmap), porém desabilitados, até as constantes
+    # harmônicas do BNDO/CHM entrarem em NIVEIS_MARE. Regra 1 do projeto:
+    # melhor um controle bloqueado que um offset inventado.
+    st.sidebar.radio(
+        "Datum de referência", chaves_mare,
+        index=chaves_mare.index("NM"),
+        format_func=lambda k: core.NIVEIS_MARE[k]["rotulo"],
+        disabled=True,
+        help="A simulação roda no nível médio nesta versão.")
+    chave_mare = "NM"
+    st.sidebar.info("Demais níveis de maré em desenvolvimento.", icon="🛠️")
+else:
+    chave_mare = st.sidebar.selectbox(
+        "Datum de referência", chaves_mare,
+        format_func=lambda k: core.NIVEIS_MARE[k]["rotulo"])
+    if core.NIVEIS_MARE["PROVISORIO"]:
+        st.sidebar.warning(
+            "Datums de maré ainda **provisórios (0,00 m)**. "
+            "Preencher `NIVEIS_MARE` em `slr_core.py` com as constantes "
+            "harmônicas do BNDO/CHM ou com a estação Caravelas do catálogo FEMAR.",
+            icon="⚠️")
+
+mare = core.NIVEIS_MARE[chave_mare]["offset_m"]
 
 sobrelev = st.sidebar.number_input(
     "Sobrelevação meteorológica (m)", 0.0, 2.0, 0.0, 0.05,
@@ -296,19 +410,54 @@ semear_bordas = st.sidebar.toggle(
     help=("Fixado na geração dos dados leves — não editável nesta versão."
           if MODO_WEB else "Evita confinamento artificial quando o "
           "recorte corta a planície."))
-area_min = st.sidebar.number_input("Área mínima de mancha (ha)", 0.0, 100.0, 0.0, 0.5)
+# "Mancha" = grupo de pixels vizinhos (conectividade 8) que caíram na MESMA
+# classe. O filtro roda depois da classificação e vale para as duas classes,
+# inundada e depressão isolada. É um filtro de RUÍDO do MDE, não de ciência:
+# o FABDEM tem incerteza vertical decimétrica, e numa planície tão plana isso
+# gera pixels isolados abaixo da cota que não representam feição real.
+_ha_por_pixel = dados["area_pixel_m2"] / 1e4
+area_min = st.sidebar.number_input(
+    "Área mínima de mancha (ha)", 0.0, 100.0, 0.0, 0.5,
+    help=("Descarta cada mancha contígua menor que este valor, nas duas "
+          "classes (inundada e depressão isolada). 0 = não descarta nada. "
+          f"Nesta grade de {dados['res_x']:.0f} m, 1 pixel = "
+          f"{_ha_por_pixel:.2f} ha, então 0,5 ha ≈ "
+          f"{int(np.ceil(0.5 / _ha_por_pixel))} pixels."))
+if area_min > 0:
+    st.sidebar.caption(
+        f"Descartando manchas com menos de "
+        f"{int(np.ceil(area_min * 1e4 / dados['area_pixel_m2']))} pixels "
+        f"({area_min:.1f} ha).")
 
 # ---- 4. Cartografia ---------------------------------------------------------
 st.sidebar.subheader("4 · Cartografia")
-fundo = st.sidebar.radio("Fundo", ["hipsometrico", "hillshade", "limpo"],
-                         format_func={"hipsometrico": "Hipsométrico + relevo sombreado",
-                                      "hillshade": "Relevo sombreado",
+# v1.2 — relevo sombreado passa a ser o PADRÃO. Em Caravelas o hipsométrico
+# consome a faixa de cor toda nos primeiros metros e compete visualmente com a
+# lâmina d'água; o sombreado deixa os cordões litorâneos legíveis e o azul da
+# inundação em primeiro plano. O hipsométrico continua disponível para quando
+# a leitura de cota absoluta importar mais que a forma do terreno.
+fundo = st.sidebar.radio("Fundo", ["hillshade", "hipsometrico", "limpo"],
+                         index=0,
+                         format_func={"hillshade": "Relevo sombreado (padrão)",
+                                      "hipsometrico": "Hipsométrico + relevo sombreado",
                                       "limpo": "Sem fundo"}.get)
 exagero = st.sidebar.slider("Exagero vertical", 1, 120,
                             core.CONFIG_MAPA["exagero_vertical"], 1)
 mostrar_isoladas = st.sidebar.toggle("Destacar depressões sem conexão", value=True)
 core.CONFIG_MAPA["alpha_agua"] = st.sidebar.slider("Opacidade da lâmina d'água",
                                                    0.2, 1.0, 0.62, 0.02)
+
+# v1.2 — tema das FIGURAS, separado do tema da aplicação (esse vem de
+# .streamlit/config.toml). Padrão escuro no modo web, para casar com a
+# interface publicada; claro no modo local, que é de onde saem os PNG do
+# relatório. As cores cartográficas não mudam com o tema — ver CONFIG_TEMA.
+tema_figura = "escuro" if st.sidebar.toggle(
+    "Tema escuro nas figuras", value=MODO_WEB,
+    help="Muda apenas o papel da figura (fundo, título, eixos). As cores de "
+         "inundação, depressão isolada e oceano são as mesmas nos dois temas. "
+         "Para o relatório impresso, desligue antes de baixar o PNG."
+) else "claro"
+_pal = core.paleta(tema_figura)
 
 
 # =============================================================================
@@ -351,14 +500,19 @@ with aba_mapa:
                  f"{'com' if conectividade else 'SEM'} teste de conectividade")
     fig, ax = core.figura_mapa(dados, mascaras, cota, subtitulo=subtitulo,
                                mostrar_isoladas=mostrar_isoladas, fundo=fundo,
-                               hs=hs, figsize=CONFIG_UI["figsize"])
+                               hs=hs, tema=tema_figura,
+                               figsize=CONFIG_UI["figsize"])
     st.pyplot(fig, width="stretch")
 
     col_a, col_b = st.columns(2)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=core.CONFIG_MAPA["dpi_export"],
-                bbox_inches="tight", facecolor="white")
+                bbox_inches="tight", facecolor=fig.get_facecolor())
+    if tema_figura == "escuro":
+        st.caption("O PNG sai com o mesmo fundo escuro da tela. Para o "
+                   "relatório impresso, desligue **Tema escuro nas figuras** "
+                   "na barra lateral antes de baixar.")
     col_a.download_button(
         "⬇️ Baixar mapa (PNG 300 dpi)", buf.getvalue(),
         file_name=f"mapa_nmrm_{cota['cota_m']:.2f}m.png", mime="image/png",
@@ -409,6 +563,12 @@ with aba_mapa_web:
         overlay=False, control=True,
     ).add_to(mapa_web)
 
+    # NÃO adicionar basemap da CARTO aqui. Desde 2025 os basemaps públicos
+    # (dark_matter, positron) exigem API key e as tiles voltam carimbadas com
+    # "API KEY REQUIRED" por cima do mapa. Tentado e revertido na v1.2.
+    # Se um dia quisermos basemap escuro, usar um provedor sem chave ou
+    # registrar uma em https://carto.com/basemaps/apikey/.
+
     folium.raster_layers.ImageOverlay(
         image=png_uri,
         bounds=bounds_web,
@@ -435,10 +595,24 @@ with aba_curva:
     st.markdown("Área inundada em função do NMRM — a **curva hipsométrica efetiva** "
                 "da planície. Onde ela vira para cima está o limiar em que a "
                 "planície de Caravelas passa a responder de forma não linear.")
+    # `topo` entra na chave do @st.cache_data. Passar `nmrm` cru faria cada
+    # passo de 0,05 m do slider Manual recalcular a curva inteira — no modo
+    # local isso é um flood-fill por ponto. Só mandamos `topo` quando a
+    # extensão do eixo realmente vai acontecer; abaixo disso vai None e a
+    # curva volta a ser cacheada como era antes da v1.2.
+    _topo_curva = float(nmrm) if nmrm > CONFIG_UI["nmrm_max"] else None
     df_curva = _curva(caminho, caminho_mascara_agua, caminho_limiar, mare,
-                      conectividade, semear_bordas, CONFIG_UI["curva_passo"])
+                      conectividade, semear_bordas, CONFIG_UI["curva_passo"],
+                      topo=_topo_curva)
+    if nmrm > CONFIG_UI["nmrm_max"]:
+        st.caption(
+            f"Eixo estendido até +{nmrm:.2f} m para acompanhar o modo Manual. "
+            f"Acima de +{CONFIG_UI['nmrm_max']:.1f} m o passo é de "
+            f"{CONFIG_UI['curva_passo_extra']:.2f} m.")
 
     fig2, ax2 = plt.subplots(figsize=(9, 4.5), constrained_layout=True)
+    fig2.patch.set_facecolor(_pal["fundo_figura"])
+    ax2.set_facecolor(_pal["fundo_figura"])
     ax2.plot(df_curva["NMRM (m)"], df_curva["Área inundada (km²)"],
              color="#1F6FEB", lw=2.2)
     ax2.fill_between(df_curva["NMRM (m)"], 0, df_curva["Área inundada (km²)"],
@@ -448,10 +622,13 @@ with aba_curva:
         ax2.axvline(v, color=prop["cor"], ls="--", lw=1.1)
         ax2.text(v, ax2.get_ylim()[1] * 0.97, f" {nome_c}", rotation=90,
                  va="top", ha="left", fontsize=7.5, color=prop["cor"])
-    ax2.axvline(nmrm, color="k", lw=1.6)
-    ax2.set_xlabel("NMRM (m)")
-    ax2.set_ylabel("Área inundada (km²)")
-    ax2.grid(alpha=0.25)
+    ax2.axvline(nmrm, color=_pal["texto"], lw=1.6)
+    ax2.set_xlabel("NMRM (m)", color=_pal["texto"])
+    ax2.set_ylabel("Área inundada (km²)", color=_pal["texto"])
+    ax2.tick_params(colors=_pal["texto_fraco"])
+    for _s in ax2.spines.values():
+        _s.set_color(_pal["borda"])
+    ax2.grid(alpha=0.25, color=_pal["grade"])
     st.pyplot(fig2, width="stretch")
     plt.close(fig2)
 
@@ -484,6 +661,28 @@ with aba_meta:
         "datum_vertical": core.CONFIG_DEM["datum_vertical"],
         "area_pixel_m2": dados["area_pixel_m2"],
     })
+
+    st.subheader("Como o nível médio entra na conta")
+    st.markdown(
+        "O nível médio **não foi calculado** por esta ferramenta: ele é "
+        "herdado do datum vertical do próprio MDE. O FABDEM é referenciado ao "
+        f"geoide **{core.CONFIG_DEM['datum_vertical']}**, e a simulação corta o "
+        "terreno em z = 0 m nesse datum — ou seja, a v1 assume "
+        "`nível médio local ≈ geoide`, com "
+        f"`OFFSET_GEOIDE_NM_M = {core.OFFSET_GEOIDE_NM_M:.2f} m`.\n\n"
+        "Essa igualdade é uma **aproximação**. A diferença real entre geoide e "
+        "superfície média do mar é a topografia dinâmica média (MDT), "
+        "sustentada por correntes, vento e densidade — de ordem decimétrica no "
+        "Atlântico Sul tropical, portanto comparável ao próprio NMRM de 2050. "
+        "Nenhuma constante harmônica foi usada até aqui: os offsets de "
+        "PM/PMS/HAT seguem em 0,00 m com `PROVISORIO = True`.")
+
+    st.subheader("Procedência dos cenários")
+    st.markdown(
+        f"- **Referência:** {core.FONTE_CENARIOS['referencia']}\n"
+        f"- **Conferido:** {core.FONTE_CENARIOS['conferido']}\n"
+        f"- **A conferir:** {core.FONTE_CENARIOS['a_conferir']}\n"
+        f"- **Substituir por:** {core.FONTE_CENARIOS['substituir_por']}")
 
     st.subheader("Fonte de dados")
     st.caption(FONTE["rotulo"])

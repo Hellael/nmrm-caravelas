@@ -119,6 +119,36 @@ desabilitado: seu valor foi fixado na geração dos dados leves. O terreno
 acima de **+20 m** foi achatado (teto) — cenários acima disso não são
 válidos nesse modo.
 
+### Pré-visualizar localmente a versão que vai ao público
+
+O resolvedor escolhe o modo sozinho: se o MDE completo existe, roda em local.
+Para ver na sua máquina exatamente a ferramenta que vai ao ar — mesmos dados
+leves, mesmo limiar pré-computado, mesmos controles bloqueados — force o modo
+com a variável `NMRM_MODO`:
+
+```powershell
+# Windows / PowerShell
+$env:NMRM_MODO = "web"
+streamlit run 02_simulador_nmrm.py
+
+# para voltar ao modo local
+Remove-Item Env:NMRM_MODO
+```
+
+```bash
+# Linux / macOS — vale só para este comando
+NMRM_MODO=web streamlit run 02_simulador_nmrm.py
+```
+
+A barra lateral mostra uma tarja **Pré-visualização do modo público** enquanto
+a variável está ligada, para não confundir controle bloqueado de propósito com
+bug. `NMRM_MODO=local` explicita o padrão; qualquer outro valor é ignorado com
+aviso no console.
+
+O que muda no modo público: cenários IPCC AR6 fora do seletor, maré travada em
+NM, campo de caminho do MDE oculto, semeadura de bordas fixa (vem
+pré-computada no raster de limiar) e tema escuro nas figuras por padrão.
+
 ### Deploy no Streamlit Community Cloud
 
 Aponte o app para `02_simulador_nmrm.py`. `requirements.txt` traz pisos de
@@ -156,8 +186,51 @@ tiles FABDEM no repositório violaria a cláusula NonCommercial/ShareAlike.
 Bases auxiliares (MapBiomas, GEBCO 2025, constantes harmônicas BNDO/CHM):
 ver seção 4 do `CLAUDE.md`.
 
+## Novidades da v1.2
+
+Ajustes vindos da apresentação ao grupo:
+
+- **Modo Manual até +10 m.** O teto é recalculado em execução contra o
+  alcance do raster de limiar e contra o `clamp_m` do MDE leve. Acima de
+  +3 m a interface avisa que a simulação saiu da faixa projetada pelo AR6
+  (máx. +1,60 m em 2100, SSP5-8.5 de baixa confiança, p83) e passa a valer
+  como teste de sensibilidade do terreno — ou comparação com os paleoníveis
+  holocênicos da própria planície (+4,8 / +3,5 / +2,5 m, Andrade et al. 2003).
+- **"Área mínima de mancha" agora explicada na interface.** Filtro de ruído
+  do MDE: descarta cada mancha contígua (vizinhança 8) menor que o valor
+  informado, nas duas classes — inundada e depressão isolada. Na grade de
+  30 m, 1 pixel = 0,09 ha.
+- **Relevo sombreado virou o fundo padrão**, com o hipsométrico como opção
+  secundária.
+- **Maré travada no nível médio na ferramenta pública (modo web).** PM, PMS
+  e HAT continuam visíveis, porém desabilitados, com o aviso "Demais níveis
+  de maré em desenvolvimento". No modo local o seletor segue editável.
+- **Procedência declarada na aba Metadados:** de onde vêm os cenários AR6 e
+  o que significa exatamente "nível médio" nesta ferramenta.
+- **Ferramenta pública mais enxuta.** No modo web o seletor de cenário
+  oferece só *Níveis da turma* e *Manual* — os cenários IPCC AR6 aparecem
+  como "em desenvolvimento", porque os valores em `CENARIOS_AR6` ainda são
+  globais (NMGM) e não o NMRM local de Caravelas. O campo de caminho do MDE
+  também some: lá o raster é o `dados_web/` versionado com o app.
+- **Tema escuro.** A aplicação publicada usa paleta preto azulado
+  (`.streamlit/config.toml`). As figuras têm toggle próprio — **Tema escuro
+  nas figuras** — com padrão escuro no modo web e claro no modo local, que é
+  de onde saem os PNG do relatório. O tema muda apenas o papel da figura;
+  as cores de inundação, depressão isolada e oceano são as mesmas nos dois
+  temas, para o mapa da tela e o do relatório serem lidos igual. O mapa
+  interativo ganhou o basemap CartoDB Dark Matter como terceira opção.
+
 ## Estado atual e limitações conhecidas
 
+- **O "nível médio" é herdado, não calculado.** O corte é feito em z = 0 m no
+  datum vertical do próprio FABDEM (geoide EGM2008): assume-se
+  `NM local ≈ geoide`, com `OFFSET_GEOIDE_NM_M = 0.00`. A diferença real é a
+  topografia dinâmica média (MDT) — decimétrica no Atlântico Sul tropical,
+  portanto da mesma ordem do NMRM projetado para 2050.
+- **Os valores SSP não foram calculados aqui.** Vêm da Tabela 9.9 do IPCC AR6
+  WGI Cap. 9 (Fox-Kemper et al. 2021): NMGM, mediana e faixa provável 17–83 %,
+  base 1995–2014. São **globais**; os valores locais de Caravelas devem sair
+  do NASA/IPCC AR6 Sea Level Projection Tool.
 - **Amarração vertical ao datum da DHN ainda pendente.** O FABDEM usa datum
   vertical EGM2008; a v1 roda no **nível médio**, sem offset de maré. Os
   campos em `NIVEIS_MARE` estão em `0.00` com flag `PROVISORIO = True`.

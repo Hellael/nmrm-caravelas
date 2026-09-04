@@ -12,3 +12,7 @@ __pycache__/
 .vscode/*
 !.vscode/settings.json
 !.vscode/launch.json
+
+# Pasta criada pelo app do Claude ao entregar arquivos na conversa.
+# Nao e codigo do projeto.
+Claude outputs/
