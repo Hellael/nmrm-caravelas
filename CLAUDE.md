@@ -38,20 +38,34 @@ nmrm-caravelas/
 ├── requirements.txt
 ├── .gitignore                 # ignorar dados/ e saidas/
 ├── config.py                  # caminhos, bbox, CRS — fonte única
-├── requirements.txt
 ├── .vscode/                    # launch.json + settings.json
 ├── src/
 │   ├── __init__.py
-│   └── slr_core.py            # MOTOR — sem interface, toda a ciência
+│   ├── slr_core.py            # MOTOR — sem interface, toda a ciência
+│   ├── fonte_dados.py         # resolve modo local x web; leitura tolerante
+│   ├── mapa_web.py            # camadas do mapa interativo (overlays, isolinhas)
+│   └── cobertura.py           # legenda MapBiomas Col. 11 + leitura do recorte
 ├── 01_mapa_elevacao.py        # mosaico/recorte/reprojeção FABDEM + mapa base
 ├── 02_simulador_nmrm.py       # interface Streamlit sobre slr_core
+├── 03_prepara_dem_web.py      # dados leves + limiar de conexão pré-computado
+├── 04_prepara_cobertura.py    # recorte do MapBiomas alinhado à grade do projeto
+├── 05_valida_cobertura_elevacao.py  # cobertura x elevação (FABDEM completo): percentis,
+│                                    # fração abaixo de cota, adjacência, distância ao mangue
 ├── teste_sintetico.py         # valida o pipeline sem precisar do FABDEM
+├── docs/
+│   ├── logica_da_ferramenta.md        # como a ferramenta raciocina, ponta a ponta
+│   ├── diagnostico_zeros.md           # investigação dos 0,0 m suspeitos no FABDEM
+│   └── validacao_mapbiomas_laudo.md   # validação da cobertura contra o laudo
 ├── dados/                     # entradas (NÃO versionar — FABDEM é CC BY-NC-SA)
 │   ├── fabdem/                # tiles brutos .tif
-│   ├── auxiliar/              # MapBiomas, GEBCO, maregrafia
+│   ├── auxiliar/              # MapBiomas recortado, GEBCO, maregrafia
 │   └── processado/            # caravelas_fabdem_utm24s_30m.tif
+├── dados_web/                 # dados leves VERSIONADOS (dem, água, limiar, cobertura)
 └── saidas/                    # PNG, GeoTIFF, CSV (NÃO versionar)
 ```
+
+`abrir_tiff_mapbiomas.py` foi o exploratório que originou o `04`. Está superado —
+não usar; o `04` alinha à grade e usa a legenda oficial conferida.
 
 ## 3. Convenções de código (obrigatórias)
 
@@ -86,8 +100,9 @@ nmrm-caravelas/
 | **FABDEM V1-2** | MDE principal | Hawker et al. 2022, ERL 17:024016. Copernicus GLO-30 com dossel e edificações removidos por ML. 1 arcsec (~30 m), 60°S–80°N, datum vertical **EGM2008**. Licença **CC BY-NC-SA 4.0** (uso acadêmico OK). Oceano codificado como exatamente `0.0`. |
 | **IPCC AR6** | Cenários SSP | Valores de `CENARIOS_AR6` vêm da **Tabela 9.9 do AR6 WGI Cap. 9** (Fox-Kemper et al. 2021) — NMGM, mediana e faixa provável 17–83 %, base 1995–2014. **Nada foi calculado por nós.** SSP5-8.5 conferido contra o Sumário Executivo do Cap. 9 (set/2026): 0,23 [0,20–0,29] m em 2050 e 0,77 [0,63–1,01] m em 2100. SSP1-2.6, SSP2-4.5 e SSP5-8.5 LC ainda **não conferidos linha a linha**. São **globais (NMGM)**: substituir pelos locais do NASA/IPCC AR6 Sea Level Projection Tool (Garner et al., Zenodo 10.5281/zenodo.5914709). Ver `core.FONTE_CENARIOS`. |
 | **GEBCO 2025** | Batimetria de contexto | — |
-| **MapBiomas** | Cobertura do solo | Entra na Parte 2, cruzando com o GeoTIFF classificado. |
+| **MapBiomas Col. 11 (2025)** | Cobertura do solo | `brazil_coverage-col11_2025.tif` (nacional, 728 MB, uint8, EPSG:4326). Recortado por `04_prepara_cobertura.py`, reamostragem **nearest** (categórico), alinhado pixel a pixel à grade do MDE. Legenda (código, nome, cor) transcrita do CSV oficial da Coleção 11 e conferida em set/2026 para os **17 códigos presentes** no recorte — os demais não foram transcritos e a interface os mostra como "fora da legenda conferida". Na v1.3 a camada é **apenas visual**. |
 | **BNDO/CHM · FEMAR** | Constantes harmônicas e datums de maré | `chm.bndo@marinha.mil.br`. **Ainda não solicitado.** Caminho crítico. |
+| **Laudo biológico Cassurubá** | Validação da cobertura | Conferência qualitativa por setor em `docs/validacao_mapbiomas_laudo.md`. Convergiu em zonação, adjacência mangue–apicum e ausência de carcinicultura; **divergiu** na cota do manguezal (ver decisão do viés de dossel). |
 | **Andrade et al. 2003** | Evolução quaternária da planície | Paleoníveis +4,8 / +3,5 / +2,5 m — validação opcional. |
 
 **Projeção de trabalho:** SIRGAS 2000 / UTM 24S — **EPSG:31984**, 30 m.
@@ -153,6 +168,45 @@ nmrm-caravelas/
   `core.CONFIG_TEMA`, acesso por `core.paleta(tema)`.
 - **Exagero vertical ~50** no sombreamento — a planície é plana demais para
   hillshade sem exagero.
+- **Mapa interativo é a aba PRINCIPAL (v1.3).** A figura de 300 dpi passa a ser a
+  segunda aba. A pergunta da disciplina é "onde", e "onde" só fecha com base
+  cartográfica real embaixo; a figura continua sendo o produto do relatório.
+- **Topografia do mapa interativo é gerada do PRÓPRIO FABDEM (v1.3).** Camada
+  hipsométrica em 11 faixas (`mapa_web.CONFIG_TOPO`) mais isolinhas de
+  0,5 / 1 / 2 / 3 / 5 / 10 m em GeoJSON. Nenhum basemap topográfico de terceiros
+  (OpenTopoMap, Terrarium, Terrain-RGB): regra 2. O relevo exibido é, por
+  construção, o mesmo que a simulação corta. As isolinhas passam por suavização
+  gaussiana, subamostragem 3x e Douglas-Peucker de 45 m — são **guia de leitura**;
+  a cota que vale é a do clique, que lê o pixel sem interpolar.
+- **Clique no mapa abre um popup no ponto (v1.3.1).** Coordenada, cota FABDEM,
+  faixa hipsométrica, situação na cota do cenário, folga em metros até alagar e
+  classe do MapBiomas — no balão sobre o ponto e, repetido, nas métricas abaixo
+  do mapa (mesma função `_leitura_ponto`, para os dois nunca divergirem).
+  `st_folium(returned_objects=["last_clicked"])`: clique rerroda o script, pan e
+  hover não. O ponto vive em `st.session_state[CHAVE_PONTO]` porque o marcador
+  precisa existir no `folium.Map` **antes** da renderização, e o retorno do
+  clique só chega depois — daí o clique guardar e disparar `st.rerun()`, com
+  comparação de coordenada para não entrar em rerun infinito.
+- **Popup sobre manguezal avisa do viés de dossel (v1.3.1).** Quem clica no
+  mangue e lê 4,3 m precisa saber que aquilo é limite superior, não cota do solo.
+  A lista de classes com esse aviso é `cobertura.CONFIG_COBERTURA["codigos_alerta_dossel"]`.
+- **Cota sob o cursor (hover) não foi implementada** e não deve ser: exigiria
+  mandar a grade inteira (~5 M px) para o navegador. A leitura contínua que
+  existe é o tooltip das isolinhas; o resto é por clique.
+- **Cobertura MapBiomas é camada VISUAL na v1.3.** Não entra em nenhuma conta. O
+  cruzamento com a máscara de inundação é a Parte 2 e depende das decisões
+  ecológicas ainda em aberto (ver `docs/validacao_mapbiomas_laudo.md` §6).
+- **Tamanho dos mapas controlado pelo usuário (v1.3).** O recorte é quase quadrado
+  (65,8 x 69,8 km), então figura em largura cheia não cabe na tela. A altura do mapa
+  interativo (padrão 620 px) e a largura da figura estática (padrão 58 %) são
+  controles da barra lateral; `figsize` caiu de (10, 8) para (8, 7).
+- **Topografia e isolinhas vêm desligadas por padrão (16/09/2026).** Os dois
+  toggles da seção "5 · Camadas do mapa interativo" abrem em `value=False`;
+  Exposição ao NMRM continua ligada por padrão. Motivo: são as duas camadas
+  mais pesadas para o navegador (overlay reprojetado + GeoJSON de isolinhas) e,
+  na v1.3, opcionais para a leitura principal do mapa — o usuário liga quando
+  quiser. O usuário continua podendo ativá-las manualmente; a lógica de
+  renderização e os dados não mudaram.
 
 ## 6. Estado atual
 
@@ -165,11 +219,17 @@ nmrm-caravelas/
       NM no modo web; relevo sombreado como fundo padrão; `help` explicativo
       na área mínima de mancha; procedência dos cenários AR6 e do nível médio
       declaradas na aba Metadados (`core.FONTE_CENARIOS`); tema escuro na
-      aplicação e nas figuras (`core.CONFIG_TEMA`), basemap CartoDB Dark
-      Matter no mapa interativo.
+      aplicação e nas figuras (`core.CONFIG_TEMA`).
 - [x] Ambiente VS Code reproduzível (config.py, requirements.txt, .vscode/).
+- [x] **v1.3** — mapa interativo como aba principal; camada topográfica e isolinhas
+      geradas do FABDEM; leitura de cota/cobertura no clique; camada MapBiomas
+      Col. 11 (visual); controles de tamanho para o mapa caber numa tela;
+      `04_prepara_cobertura.py` e `src/cobertura.py`; validação contra o laudo
+      do Cassurubá documentada.
 - [ ] Imagem de satélite de fundo (`contextily`, reprojeção para WebMercator).
 - [ ] Solicitação ao BNDO e integração da maré.
+- [ ] Tratar o viés de dossel sobre manguezal (ver regra 6) — bloqueia a Parte 2.
+- [ ] Limites vetoriais da RESEX Cassurubá para trocar as faixas de latitude por setores reais.
 - [ ] Parte 2 — resposta ecológica cruzando com MapBiomas.
 
 ## 7. Regras de conduta científica (não negociáveis)
@@ -186,3 +246,10 @@ nmrm-caravelas/
 5. A saída é **exposição potencial**, não previsão de inundação real:
    não resolve hidrodinâmica, atenuação de maré no estuário, ondas, drenagem
    nem resposta morfodinâmica (acresção de manguezal, migração de duna).
+6. **Não reportar área de manguezal perdida por cenário** enquanto o viés de dossel
+   não for tratado. Medido em 05/09/2026 cruzando FABDEM x MapBiomas: mangue com
+   cota mediana de 4,31 m contra apicum de 1,91 m — ordem invertida em relação à
+   zonação de maré, resíduo de dossel da ordem de 3 m, maior que todo o NMRM
+   projetado para 2100. O manguezal sai artificialmente seguro. O apicum, sem
+   dossel, é o controle interno e responde como esperado (56 % abaixo de +2 m).
+   Detalhes em `docs/validacao_mapbiomas_laudo.md` §4.4.

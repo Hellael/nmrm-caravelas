@@ -28,7 +28,6 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
-from scipy import ndimage
 
 # =============================================================================
 # PARÂMETROS
@@ -40,6 +39,10 @@ CONFIG_FONTE = {
     "arq_agua_web": "mascara_agua_web.tif",
     "arq_limiar_web": "limiar_conexao_web.tif",
     "arq_meta_web": "metadados_web.json",
+    # v1.3 — cobertura do solo (MapBiomas Col. 11), produto do 04_prepara_cobertura.py.
+    # Camada OPCIONAL: se faltar, a interface desliga o controle e segue.
+    "arq_cobertura_web": "cobertura_web.tif",
+    "arq_cobertura_local": "caravelas_mapbiomas_col11_2025_utm24s_30m.tif",
 
     # Variável de ambiente que força o modo, ignorando a autodetecção.
     "env_modo": "NMRM_MODO",
@@ -67,6 +70,7 @@ def resolver_fonte(raiz_repo: str | Path = None) -> dict:
         dem        : caminho do GeoTIFF de elevação
         agua       : caminho da máscara d'água (ou None)
         limiar     : caminho do raster de limiar (ou None — só existe no modo web)
+        cobertura  : caminho do recorte MapBiomas (ou None — camada opcional)
         metadados  : dict do metadados_web.json (ou None)
         rotulo     : texto curto para exibir na interface
     """
@@ -96,13 +100,18 @@ def resolver_fonte(raiz_repo: str | Path = None) -> dict:
         import config
         dem_local = Path(str(config.MDE_PROCESSADO))
         agua_local = Path(str(config.MASCARA_AGUA))
+        cob_local = Path(str(config.DIR_AUXILIAR)) / CONFIG_FONTE["arq_cobertura_local"]
         if dem_local.exists():
             print(f"[FONTE] modo=LOCAL | {dem_local}")
+            if not cob_local.exists():
+                print("[FONTE] cobertura MapBiomas ausente — rode 04_prepara_cobertura.py "
+                      "para habilitar a camada. A simulação não depende dela.")
             return {
                 "modo": MODO_LOCAL,
                 "dem": str(dem_local),
                 "agua": str(agua_local) if agua_local.exists() else None,
                 "limiar": None,
+                "cobertura": str(cob_local) if cob_local.exists() else None,
                 "metadados": None,
                 "rotulo": "Dados completos (30 m, float32) — flood-fill em tempo real",
                 "forcado": False,
@@ -128,6 +137,7 @@ def resolver_fonte(raiz_repo: str | Path = None) -> dict:
     agua_web = dir_web / CONFIG_FONTE["arq_agua_web"]
     limiar_web = dir_web / CONFIG_FONTE["arq_limiar_web"]
     meta_web = dir_web / CONFIG_FONTE["arq_meta_web"]
+    cob_web = dir_web / CONFIG_FONTE["arq_cobertura_web"]
 
     meta = None
     if meta_web.exists():
@@ -145,6 +155,7 @@ def resolver_fonte(raiz_repo: str | Path = None) -> dict:
         "dem": str(dem_web),
         "agua": str(agua_web) if agua_web.exists() else None,
         "limiar": str(limiar_web) if limiar_web.exists() else None,
+        "cobertura": str(cob_web) if cob_web.exists() else None,
         "metadados": meta,
         "rotulo": rot,
         # True = o modo web foi pedido à mão, não deduzido da ausência de dados.

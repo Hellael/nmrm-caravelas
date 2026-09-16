@@ -16,3 +16,9 @@ __pycache__/
 # Pasta criada pelo app do Claude ao entregar arquivos na conversa.
 # Nao e codigo do projeto.
 Claude outputs/
+
+# Logs de sessao (inspecao, execucao local) — nao sao artefato do projeto.
+scratch_*.log
+
+# Exploratorio superado pelo 04_prepara_cobertura.py — ver CLAUDE.md.
+abrir_tiff_mapbiomas.py

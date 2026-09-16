@@ -42,10 +42,16 @@ nmrm-caravelas/
 │   ├── __init__.py
 │   ├── slr_core.py            # MOTOR — sem interface, toda a ciência
 │   ├── fonte_dados.py         # decide modo local x web, lê MDE e limiar
-│   └── mapa_web.py            # mapa base interativo (folium)
+│   ├── mapa_web.py            # camadas do mapa interativo (overlays, isolinhas)
+│   └── cobertura.py           # legenda MapBiomas Col. 11 + leitura do recorte
 ├── 01_mapa_elevacao.py        # mosaico/recorte/reprojeção FABDEM + mapa base
 ├── 02_simulador_nmrm.py       # interface Streamlit sobre slr_core
 ├── 03_prepara_dem_web.py      # gera os dados leves de dados_web/
+├── 04_prepara_cobertura.py    # recorta o MapBiomas na grade do projeto
+├── 05_valida_cobertura_elevacao.py  # cobertura x elevação (FABDEM completo)
+├── docs/
+│   ├── logica_da_ferramenta.md        # como a ferramenta raciocina, ponta a ponta
+│   └── validacao_mapbiomas_laudo.md   # cobertura x Laudo biológico do Cassurubá
 ├── teste_sintetico.py         # valida o pipeline sem precisar do FABDEM
 ├── dados/                     # entradas (NÃO versionar — FABDEM é CC BY-NC-SA)
 │   ├── fabdem/                # tiles brutos .tif
@@ -152,7 +158,7 @@ pré-computada no raster de limiar) e tema escuro nas figuras por padrão.
 ### Deploy no Streamlit Community Cloud
 
 Aponte o app para `02_simulador_nmrm.py`. `requirements.txt` traz pisos de
-versão (não versões exatas), e `.streamlit/config.toml` fixa o tema claro.
+versão (não versões exatas), e `.streamlit/config.toml` fixa o tema escuro.
 Nenhuma variável de ambiente é necessária — a ausência de `NMRM_DIR_DADOS`
 já seleciona o modo web.
 
@@ -183,8 +189,54 @@ declarada à parte, no `LICENSE` da raiz.
 Os diretórios `dados/` e `saidas/` **não são versionados**: redistribuir os
 tiles FABDEM no repositório violaria a cláusula NonCommercial/ShareAlike.
 
-Bases auxiliares (MapBiomas, GEBCO 2025, constantes harmônicas BNDO/CHM):
-ver seção 4 do `CLAUDE.md`.
+Bases auxiliares (GEBCO 2025, constantes harmônicas BNDO/CHM): ver seção 4 do
+`CLAUDE.md`.
+
+**MapBiomas.** Baixe o mosaico nacional de cobertura da Coleção 11
+(`brazil_coverage-col11_2025.tif`) em <https://brasil.mapbiomas.org>, coloque em
+`dados/` e rode:
+
+```bash
+python 04_prepara_cobertura.py
+```
+
+O script lê apenas a janela de Caravelas do arquivo nacional, reprojeta com
+reamostragem *nearest* (dado categórico) e grava o recorte alinhado à grade do
+MDE, em `dados/auxiliar/` e em `dados_web/`. A camada aparece no mapa
+interativo; se o recorte não existir, o controle fica desligado e a simulação
+segue normalmente.
+
+## Novidades da v1.3
+
+- **O mapa interativo virou a aba principal.** A figura de 300 dpi passou para a
+  segunda aba e continua sendo o produto do relatório.
+- **Camada topográfica gerada do próprio FABDEM.** Hipsométrico em 11 faixas
+  (0,5 m de degrau nas cotas baixas) mais isolinhas de
+  0,5 / 1 / 2 / 3 / 5 / 10 / 20 m. Nenhum basemap topográfico de terceiros: o
+  relevo exibido é o mesmo que a simulação corta. Os dois toggles — topografia
+  e isolinhas — vêm **desligados por padrão** na seção "5 · Camadas do mapa
+  interativo"; o usuário liga quando quiser.
+- **Clique lê o ponto, num balão sobre ele.** Coordenada, cota FABDEM sem
+  interpolação, faixa hipsométrica, situação naquela cota (inundada / isolada /
+  acima), quantos metros faltam para alagar e classe de cobertura do MapBiomas.
+  Clicar sobre manguezal acrescenta o aviso de viés de dossel. As mesmas
+  informações aparecem em métricas abaixo do mapa.
+- **Camada MapBiomas Coleção 11 (2025)**, com legenda oficial conferida.
+  Nesta versão é **apenas visual** — não entra em nenhum cálculo.
+  Gerada por `python 04_prepara_cobertura.py`.
+- **Os mapas cabem numa tela.** Altura do mapa interativo e largura da figura
+  estática viraram controles da barra lateral.
+- **Validação da cobertura contra o Laudo biológico do Cassurubá**
+  (`docs/validacao_mapbiomas_laudo.md`) — e, dela, o achado abaixo.
+
+> ⚠️ **Viés de dossel sobre manguezal.** O cruzamento FABDEM × MapBiomas mostrou
+> o mangue em cota mediana de **4,31 m** e o apicum em **1,91 m** — ordem
+> invertida em relação à zonação de maré, que põe a planície hipersalina *acima*
+> da floresta de mangue. O resíduo de dossel sobre mangue é da ordem de 3 m,
+> maior que todo o NMRM projetado para 2100. Consequência prática: a ferramenta
+> **subestima** a exposição do manguezal, e área de mangue perdida por cenário
+> não deve ser reportada enquanto isso não for tratado. O apicum, sem dossel,
+> mede certo e responde como esperado (56 % abaixo de +2 m).
 
 ## Novidades da v1.2
 
@@ -217,8 +269,7 @@ Ajustes vindos da apresentação ao grupo:
   nas figuras** — com padrão escuro no modo web e claro no modo local, que é
   de onde saem os PNG do relatório. O tema muda apenas o papel da figura;
   as cores de inundação, depressão isolada e oceano são as mesmas nos dois
-  temas, para o mapa da tela e o do relatório serem lidos igual. O mapa
-  interativo ganhou o basemap CartoDB Dark Matter como terceira opção.
+  temas, para o mapa da tela e o do relatório serem lidos igual.
 
 ## Estado atual e limitações conhecidas
 
