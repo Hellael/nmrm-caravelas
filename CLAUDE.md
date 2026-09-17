@@ -52,10 +52,12 @@ nmrm-caravelas/
 ├── 05_valida_cobertura_elevacao.py  # cobertura x elevação (FABDEM completo): percentis,
 │                                    # fração abaixo de cota, adjacência, distância ao mangue
 ├── teste_sintetico.py         # valida o pipeline sem precisar do FABDEM
+├── teste_conectividade.py     # v1.4: máscara de água na grade nativa + canais MapBiomas
 ├── docs/
 │   ├── logica_da_ferramenta.md        # como a ferramenta raciocina, ponta a ponta
 │   ├── diagnostico_zeros.md           # investigação dos 0,0 m suspeitos no FABDEM
-│   └── validacao_mapbiomas_laudo.md   # validação da cobertura contra o laudo
+│   ├── validacao_mapbiomas_laudo.md   # validação da cobertura contra o laudo
+│   └── v1.4_notas_tecnicas.md         # máscara de água (área x conexão) + canais MapBiomas
 ├── dados/                     # entradas (NÃO versionar — FABDEM é CC BY-NC-SA)
 │   ├── fabdem/                # tiles brutos .tif
 │   ├── auxiliar/              # MapBiomas recortado, GEBCO, maregrafia
@@ -196,6 +198,57 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
 - **Cobertura MapBiomas é camada VISUAL na v1.3.** Não entra em nenhuma conta. O
   cruzamento com a máscara de inundação é a Parte 2 e depende das decisões
   ecológicas ainda em aberto (ver `docs/validacao_mapbiomas_laudo.md` §6).
+- **Máscara de água detectada na grade nativa, com DUAS reamostragens — área
+  e conexão (v1.4b).** Testar `dem==0.0` DEPOIS do bilinear (como a v1.3
+  fazia) mistura o 0.0 da água com a cota da margem antes do teste — a
+  máscara perdia ~1 px em toda margem e canais de 1–2 px de largura somiam
+  por completo. Agora a água é detectada e zerada para NaN na grade WGS84,
+  antes de qualquer reamostragem, e reprojetada DUAS vezes para propósitos
+  diferentes: `agua_area` (`Resampling.average` sobre 0/1, limiar
+  `>= 0,5` — só sai da terra o pixel cuja MAIORIA da área é água de
+  verdade; é o que mascara o DEM e vira `config.MASCARA_AGUA`) e
+  `agua_conexao` (`Resampling.max` — qualquer fração de água já conta para
+  conexão). A diferença `agua_conexao & ~agua_area` é a MARGEM
+  (`config.MASCARA_MARGEM`): fica como TERRA na área (cota real preservada),
+  mas conduz conexão hidráulica — soma-se ao caminho por canal MapBiomas
+  (mesmas regras, sem a salvaguarda de cota, porque é água real medida no
+  próprio FABDEM). A etapa intermediária só com `Resampling.max` (v1.4a) foi
+  descartada: tirava da conta de área todo pixel com qualquer fração de água
+  real, mesmo sendo majoritariamente terra — ver `docs/v1.4_notas_tecnicas.md`
+  §2 para o porquê e os números. Ganho medido em 16/09/2026: `agua_area`
+  +10,76 km² (11.960 px), `agua_conexao` +23,43 km² (26.028 px), margem
+  12,66 km² (14.068 px) — área emersa final: **2.429,4 km²**.
+  **Cuidado ao reprojetar máscara categórica 0/1 com `rasterio.warp.reproject`:**
+  passar `dst_nodata=0` junto com `src_nodata=None` corrompeu o resultado
+  (quase 100% do destino virava "água" com `Resampling.max`/`average`/
+  `nearest`) — bug real do par GDAL/rasterio 1.5.1 testado neste projeto, não
+  suposição. Correção: não declarar `dst_nodata` nessas reprojeções (os
+  arrays de destino já nascem zerados com `np.zeros`, que é o preenchimento
+  correto fora do domínio). `teste_conectividade.py` cobre isso (casos 1 e 7).
+- **Canais MapBiomas (classe 33) como caminho hidráulico, não fonte (v1.4b).**
+  Um pixel de canal fora da máscara de água CONDUZ a água (entra no
+  `candidato` do flood-fill) mas nunca a INJETA sozinho (nunca entra em
+  `fonte`) — necessário porque a classe 33 também cobre lagoas interiores sem
+  ligação com o mar, que virariam conexão falsa se fossem fonte. Só conta
+  como caminho até `caminho_cota_max_m = 6.0` (teto dos terraços holocênicos
+  de Andrade et al. 2003, o mesmo de `config.FAIXAS_ALTIMETRICAS`) — evita
+  religar uma depressão distante através de um lago/rio alto no tabuleiro
+  Barreiras. A margem d'água real (acima) soma-se por união a este caminho,
+  mas é SEMPRE ativa — não depende do toggle "canais", que controla só a
+  camada extra do MapBiomas. Controlado por `CONFIG_INUNDACAO["caminhos_canais"]`
+  em `slr_core.py`; a interface tem um toggle próprio, ligado por padrão,
+  desabilitado sem conectividade ou sem cobertura/raster de canais. Gera
+  DOIS rasters de limiar no modo web (`limiar_conexao_web.tif` = margem
+  sozinha, `limiar_conexao_canais_web.tif` = margem união canal) para a
+  interface mostrar as duas áreas lado a lado. **Achado que parecia
+  coincidência e não era:** a área isolada sai IDÊNTICA entre v1.4a e v1.4b
+  em toda cota testada — não é porque as depressões isoladas ficam "longe"
+  da correção; é porque todo pixel de margem abaixo da cota já encosta
+  fisicamente na água (é a própria definição de margem) e por isso já
+  conecta na hora, sem depender de qual das duas máscaras de área está em
+  uso. A margem nunca alcança uma depressão interior isolada por um cordão —
+  só estende a conexão um pixel além da água em si. Ver
+  `docs/v1.4_notas_tecnicas.md`.
 - **Tamanho dos mapas controlado pelo usuário (v1.3).** O recorte é quase quadrado
   (65,8 x 69,8 km), então figura em largura cheia não cabe na tela. A altura do mapa
   interativo (padrão 620 px) e a largura da figura estática (padrão 58 %) são
@@ -226,9 +279,25 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
       Col. 11 (visual); controles de tamanho para o mapa caber numa tela;
       `04_prepara_cobertura.py` e `src/cobertura.py`; validação contra o laudo
       do Cassurubá documentada.
+- [x] **v1.4b** — máscara de água detectada na grade nativa (WGS84) antes da
+      reprojeção (corrige o bug de bilinear misturando o 0,0 da água na cota
+      da margem e apagando canais de 1–2 px), reprojetada em DUAS versões —
+      `agua_area` (`Resampling.average` ≥ 0,5, decide o que sai da terra) e
+      `agua_conexao` (`Resampling.max`, decide o que conduz conexão); a
+      diferença é a MARGEM d'água real, que fica terra mas conduz. Canais
+      MapBiomas (classe 33) continuam funcionando como caminho hidráulico —
+      conduzem, não injetam água — até +6,0 m de cota, somados à margem por
+      união; toggle próprio na interface e dois rasters de limiar no modo web
+      (`limiar_conexao_web.tif` = margem sozinha, `limiar_conexao_canais_web.tif`
+      = margem + canal). Área emersa final: 2.429,4 km². `teste_conectividade.py`
+      (7 casos). Ver `docs/v1.4_notas_tecnicas.md` — inclui a v1.4a
+      (só `Resampling.max`) como etapa intermediária descartada.
 - [ ] Imagem de satélite de fundo (`contextily`, reprojeção para WebMercator).
 - [ ] Solicitação ao BNDO e integração da maré.
 - [ ] Tratar o viés de dossel sobre manguezal (ver regra 6) — bloqueia a Parte 2.
+- [ ] Tratar o degrau de dossel de mata ciliar/mangue nas margens de canal —
+      não entrou no escopo da v1.4 (decisão: descartado nesta versão; ver
+      `docs/v1.4_notas_tecnicas.md`).
 - [ ] Limites vetoriais da RESEX Cassurubá para trocar as faixas de latitude por setores reais.
 - [ ] Parte 2 — resposta ecológica cruzando com MapBiomas.
 

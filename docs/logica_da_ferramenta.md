@@ -1,7 +1,7 @@
 # A lógica por trás do simulador de NMRM — Caravelas (BA)
 
 **Projeto 26.09** · Ecossistemas Marinhos Costeiros — UERJ / FAOC / DOB
-Documento de apoio à apresentação · versão 1.2 · setembro de 2026
+Documento de apoio à apresentação · versão 1.4b · setembro de 2026
 
 ---
 
@@ -124,40 +124,82 @@ Uma depressão atrás de um cordão litorâneo pode estar 50 cm abaixo do nível
 mar e continuar seca, porque não existe caminho físico entre ela e o oceano.
 
 Então a ferramenta faz um passo a mais. Ela rotula os componentes conexos do
-conjunto *(terreno abaixo da cota) ∪ (água atual)* com vizinhança de 8, e
-pergunta de cada mancha: **ela toca o oceano, o estuário, ou a borda do
-recorte?** Se sim, é `inundada`. Se não, é `depressão isolada` — uma classe
-separada, com cor própria, **nunca somada à área inundada**.
+conjunto *(terreno abaixo da cota) ∪ (água de área) ∪ (margem d'água real) ∪
+(canal MapBiomas, até +6,0 m)* com vizinhança de 8, e pergunta de cada
+mancha: **ela toca o oceano, o estuário, ou a borda do recorte?** Se sim, é
+`inundada`. Se não, é `depressão isolada` — uma classe separada, com cor
+própria, **nunca somada à área inundada**. A margem e o canal entram só como
+**caminho**: eles deixam a água atravessar, mas — ao contrário do
+oceano/estuário — nunca são eles próprios a fonte que injeta água (uma
+lagoa interior sem ligação com o mar, classe 33, não pode virar conexão
+falsa só por estar na mesma classe; ver `docs/v1.4_notas_tecnicas.md` para a
+distinção entre as duas máscaras de água).
 
 ### O que isso muda, em números
 
-Recorte de Caravelas, 2.440,9 km² de área emersa, nível médio, sem maré:
+A v1.4b corrigiu a conectividade em duas frentes (ver
+`docs/v1.4_notas_tecnicas.md` para o detalhe técnico e para uma etapa
+intermediária testada e descartada no caminho):
 
-| Cota | Inundada (conectada) | Depressão isolada | Bathtub ingênuo |
-|-----:|---------------------:|------------------:|----------------:|
-| +0,5 m | 4,3 km² | 0,6 km² | 4,9 km² |
-| +1,0 m | 7,0 km² | 1,5 km² | 8,5 km² |
-| +1,5 m | 10,9 km² | 14,7 km² | 25,6 km² |
-| +2,0 m | **27,8 km²** | **43,3 km²** | **71,1 km²** |
-| +3,0 m | 119,6 km² | 75,0 km² | 194,6 km² |
+1. A máscara de água passa a ser detectada na grade nativa, antes da
+   reprojeção — e reprojetada em **duas** versões: `agua_area`
+   (`Resampling.average` ≥ 0,5, decide o que sai da terra) e `agua_conexao`
+   (`Resampling.max`, decide o que conduz conexão). A diferença é a MARGEM
+   d'água real — fica terra, mas conduz.
+2. Canais do MapBiomas (classe 33, até +6,0 m de cota) funcionam como
+   caminho hidráulico adicional — conduzem a água sem serem fonte.
 
-**Leia a linha de +2 m.** Um simulador bathtub pintaria 71 km² de azul.
-Desses, apenas 28 km² têm caminho hidráulico até o mar — **61% do que seria
-mostrado como inundação não é inundação**, é depressão fechada.
+Por isso a tabela abaixo tem duas colunas de inundada: **sem canais**
+(margem d'água real, sempre ativa) e **com canais** (margem + canal
+MapBiomas, comportamento ligado por padrão na interface). A v1.3 entra só
+como referência histórica — os números que a turma viu na apresentação de
+05/09 vinham, em boa parte, do bug de reprojeção da máscara de água
+corrigido nesta versão, não de um sinal físico novo.
 
-Repare também no salto entre +1,0 e +1,5 m: a área isolada pula de 1,5 para
-14,7 km². Isso é a assinatura geomorfológica da planície — os cordões
-litorâneos quaternários funcionam como diques, e as intercordões alagam por
-trás deles antes de qualquer conexão se abrir. É exatamente o tipo de leitura
-que um mapa bathtub apaga.
+Recorte de Caravelas, área emersa 2.440,9 km² (v1.3, referência histórica) →
+**2.429,4 km² (v1.4b)**, nível médio, sem maré:
+
+| Cota | Inundada v1.3 | Inundada v1.4b sem canais | Inundada v1.4b com canais | Isolada v1.3 | Isolada v1.4b com canais | Bathtub v1.3 | Bathtub v1.4b |
+|-----:|---:|---:|---:|---:|---:|---:|---:|
+| +0,5 m | 4,29 | 0,58 | 0,69 | 0,57 | 0,14 | 4,86 | 0,83 |
+| +1,0 m | 6,98 | 0,94 | 1,19 | 1,53 | 0,70 | 8,50 | 1,89 |
+| +1,5 m | 10,84 | 2,32 | 4,80 | 14,33 | 11,41 | 25,17 | 16,21 |
+| +2,0 m | 27,59 | 17,68 | **19,87** | 43,02 | **39,94** | 70,62 | 59,81 |
+| +3,0 m | 119,29 | 107,42 | 140,18 | 74,69 | **41,58** | 193,98 | 181,77 |
+
+**Leia a linha de +3 m.** Sem canal MapBiomas, 74,7 km² ficariam
+classificados como depressão isolada. Com canal — a mesma planície, só que
+reconhecendo que o rio e seus afluentes conduzem água mesmo onde o FABDEM
+não zera a cota — 33,1 km² dessa área na verdade tem caminho até o mar, e a
+área isolada cai para 41,6 km². Em +1,5 m o efeito já aparece: a área
+isolada cai de 14,3 para 11,4 km², porque é ali que os cordões litorâneos
+começam a ser transpostos pelos canais que os cruzam.
+
+Um achado que vale registrar: a coluna "Isolada com canais" sai **idêntica**
+entre a etapa intermediária (só `Resampling.max`, descartada) e a v1.4b
+final, em toda cota testada. Não é porque as depressões isoladas ficam
+"longe" da correção da máscara — é porque todo pixel de margem, por
+definição, já encosta fisicamente na água: se ele está abaixo da cota,
+conecta na hora, não importa qual das duas máscaras de área está em uso. A
+margem nunca alcança uma depressão interior isolada por um cordão litorâneo;
+ela só estende a conexão um pixel além da própria água. Quem muda a área
+isolada é o canal MapBiomas (que pode atravessar um cordão inteiro), não a
+margem.
 
 ### A honestidade da classe "isolada"
 
 A classe isolada é um **limite superior** do que "não alaga de verdade". Dois
 motivos:
 
-1. Canais e gamboas mais estreitos que um pixel (30 m) podem não estar na
-   máscara de água, então uma conexão real pode passar despercebida.
+1. A v1.4b tratou o caso mais grosseiro (canal MapBiomas até 30 m de
+   largura, como caminho hidráulico até +6,0 m) e corrigiu a máscara de água
+   na grade nativa, separando o que sai da área (`agua_area`) do que conduz
+   conexão (`agua_conexao`/margem) — canais de 1–2 px que antes
+   desapareciam na reamostragem agora sobrevivem como margem. O que sobra:
+   gamboas mais estreitas que 1 pixel nativo de qualquer forma, e o degrau
+   de dossel de mata ciliar/mangue nas margens de canal (o FABDEM ainda mede
+   o topo da vegetação ribeirinha, não o solo) — nenhum dos dois foi
+   corrigido, por decisão (ver `docs/v1.4_notas_tecnicas.md` §9).
 2. A ferramenta não modela infiltração, lençol freático nem galgamento por
    onda — uma depressão "isolada" pode salinizar por baixo sem nunca receber
    água por cima.

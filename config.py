@@ -65,7 +65,22 @@ MDE_PROCESSADO = DIR_PROCESSADO / "caravelas_fabdem_utm24s_30m.tif"
 # MDE_PROCESSADO converte esses pixels em nodata na gravação — indistinguível
 # de "fora do bbox, sem tile" — e o teste de conectividade em slr_core precisa
 # saber por onde a água pode propagar mesmo depois desse round-trip.
+#
+# v1.4b: é a reprojeção por Resampling.average da água nativa, testada contra
+# o limiar CONFIG_01["limiar_agua_area"] (0.5) — só sai da terra o pixel cuja
+# MAIORIA da área de fato é água. Ver caravelas_mascara_margem_* abaixo para
+# os pixels que ficam abaixo desse limiar mas ainda têm água real.
 MASCARA_AGUA = DIR_PROCESSADO / "caravelas_mascara_agua_utm24s_30m.tif"
+
+# Máscara de MARGEM d'água (v1.4b): pixels que NÃO entram em MASCARA_AGUA
+# (ficam como terra, com a cota real do MDE) mas têm água real suficiente
+# (Resampling.max da água nativa) para conduzir a conexão hidráulica — ou
+# seja, agua_conexao & ~agua_area. Consumida por 03_prepara_dem_web.py e por
+# slr_core.mascara_caminho: soma-se ao caminho hidráulico (canal MapBiomas),
+# com as mesmas regras — conduz, nunca é fonte, e sem a salvaguarda de cota
+# do canal (aqui é água real medida no próprio FABDEM, não uma classe de
+# cobertura que pode estar longe do mar).
+MASCARA_MARGEM = DIR_PROCESSADO / "caravelas_mascara_margem_utm24s_30m.tif"
 
 
 def criar_estrutura():

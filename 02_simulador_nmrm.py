@@ -145,6 +145,57 @@ def _carregar_cobertura(caminho: str):
     return cob.carregar_cobertura(caminho)
 
 
+@st.cache_resource(show_spinner="Calculando máscara de canais (MapBiomas)...")
+def _mascara_caminho(caminho: str, caminho_mascara_agua: str, caminho_cobertura: str):
+    """
+    Máscara de canal MapBiomas como caminho hidráulico (v1.4) — ver
+    `core.mascara_caminho` / `core.CONFIG_INUNDACAO["caminhos_canais"]`.
+
+    Só é chamada no modo LOCAL: o modo web usa o raster de limiar já
+    pré-computado COM canais (`limiar_conexao_canais_web.tif`), não recalcula
+    em tempo real. Devolve None se faltar máscara de água ou cobertura.
+    """
+    d = _carregar(caminho)
+    ma = (_carregar_mascara_agua(caminho_mascara_agua)
+          if caminho_mascara_agua and os.path.exists(caminho_mascara_agua) else None)
+    cob_d = _carregar_cobertura(caminho_cobertura) if caminho_cobertura else None
+    if ma is None or cob_d is None:
+        return None
+    return core.mascara_caminho(d["dem"], ma, cob_d["classes"])
+
+
+@st.cache_resource(show_spinner="Lendo a máscara de margem d'água...")
+def _mascara_margem(caminho_margem: str):
+    """
+    Margem d'água real (v1.4b) — `agua_conexao & ~agua_area`, produzida por
+    `01_mapa_elevacao.py`. Fica como TERRA na área mas conduz conexão. Ao
+    contrário do canal MapBiomas, é SEMPRE ativa (não depende do toggle de
+    canais): é uma correção do próprio dado de água, não uma suposição sobre
+    cobertura do solo. Só existe no modo local — no modo web ela já está
+    embutida nos dois rasters de limiar (`03_prepara_dem_web.py`).
+    """
+    return core.carregar_mascara_margem(caminho_margem)
+
+
+def _mascara_caminho_total(caminho: str, caminho_mascara_agua: str,
+                           caminho_cobertura: str, usar_canais: bool):
+    """
+    União da margem d'água real (sempre, modo local) com o canal MapBiomas
+    (só se `usar_canais`). Só roda no modo local — no modo web a margem e o
+    canal já estão embutidos nos rasters de limiar pré-computados.
+    """
+    if MODO_WEB:
+        return None
+    margem = _mascara_margem(str(config.MASCARA_MARGEM))
+    canal = (_mascara_caminho(caminho, caminho_mascara_agua, caminho_cobertura)
+             if usar_canais else None)
+    if margem is None:
+        return canal
+    if canal is None:
+        return margem
+    return margem | canal
+
+
 @st.cache_data(show_spinner="Gerando overlay de cobertura...")
 def _overlay_cobertura(caminho: str):
     d = _carregar_cobertura(caminho)
@@ -157,22 +208,26 @@ def _overlay_cobertura(caminho: str):
 
 @st.cache_data(show_spinner="Gerando overlay do mapa interativo...")
 def _overlay_web(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
+                 caminho_limiar_canais: str, caminho_cobertura: str,
                  cota_m: float, conectividade: bool, semear_bordas: bool,
-                 area_min: float, cores: dict):
+                 usar_canais: bool, area_min: float, cores: dict):
     """
     Recalcula a máscara de inundação (barato — ndimage.label numa grade de
     ~5M px no modo local, ou consulta O(n) ao raster de limiar no modo web)
     e reprojeta+codifica o PNG (caro — é isso que o cache evita a cada
-    movimento de slider que NÃO muda cota/conectividade/área mínima).
+    movimento de slider que NÃO muda cota/conectividade/canais/área mínima).
     """
     d = _carregar(caminho)
     ma = (_carregar_mascara_agua(caminho_mascara_agua)
           if os.path.exists(caminho_mascara_agua) else None)
     lm = _carregar_limiar(caminho_limiar) if caminho_limiar else None
+    lm_c = _carregar_limiar(caminho_limiar_canais) if caminho_limiar_canais else None
+    mc = _mascara_caminho_total(caminho, caminho_mascara_agua, caminho_cobertura, usar_canais)
     m = fonte.mascara_inundacao_auto(
         core, d, cota_m,
         conectividade=conectividade, semear_bordas=semear_bordas,
-        area_minima_ha=area_min, mascara_agua=ma, limiar=lm)
+        area_minima_ha=area_min, mascara_agua=ma, limiar=lm,
+        usar_canais=usar_canais, mascara_caminho=mc, limiar_canais=lm_c)
     classes = mapaweb.classificar_overlay(m, ma if ma is not None else d["mask_oceano"])
     return mapaweb.gerar_overlay_web(classes, d["transform"], d["crs"], cores)
 
@@ -185,20 +240,25 @@ def _overlay_web(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
 # download_button dependem delas). src/slr_core.py fica intocado.
 # -----------------------------------------------------------------------------
 
-def _mascara_auto(d, ma, lm, cota_m, conectividade, semear_bordas):
+def _mascara_auto(d, ma, lm, cota_m, conectividade, semear_bordas,
+                  usar_canais=False, mc=None, lm_c=None):
     return fonte.mascara_inundacao_auto(
         core, d, cota_m, conectividade=conectividade,
-        semear_bordas=semear_bordas, mascara_agua=ma, limiar=lm)
+        semear_bordas=semear_bordas, mascara_agua=ma, limiar=lm,
+        usar_canais=usar_canais, mascara_caminho=mc, limiar_canais=lm_c)
 
 
 @st.cache_data(show_spinner="Rodando a curva de exposição...")
 def _curva(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
-           mare_m: float, conectividade: bool, semear_bordas: bool, passo: float,
-           topo: float = None):
+           caminho_limiar_canais: str, caminho_cobertura: str,
+           mare_m: float, conectividade: bool, semear_bordas: bool,
+           usar_canais: bool, passo: float, topo: float = None):
     d = _carregar(caminho)
     ma = (_carregar_mascara_agua(caminho_mascara_agua)
           if os.path.exists(caminho_mascara_agua) else None)
     lm = _carregar_limiar(caminho_limiar) if caminho_limiar else None
+    lm_c = _carregar_limiar(caminho_limiar_canais) if caminho_limiar_canais else None
+    mc = _mascara_caminho_total(caminho, caminho_mascara_agua, caminho_cobertura, usar_canais)
 
     cotas = np.arange(CONFIG_UI["nmrm_min"], CONFIG_UI["nmrm_max"] + 1e-9, passo)
 
@@ -214,7 +274,8 @@ def _curva(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
     reg = []
     for nmrm in cotas:
         c = core.cota_limiar(float(nmrm), mare_m=mare_m)
-        m = _mascara_auto(d, ma, lm, c["cota_m"], conectividade, semear_bordas)
+        m = _mascara_auto(d, ma, lm, c["cota_m"], conectividade, semear_bordas,
+                          usar_canais=usar_canais, mc=mc, lm_c=lm_c)
         e = core.estatisticas_area(m, d["dem"], d["area_pixel_m2"])
         reg.append({"NMRM (m)": round(float(nmrm), 2),
                     "Cota (m)": round(c["cota_m"], 2),
@@ -225,11 +286,36 @@ def _curva(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
 
 @st.cache_data(show_spinner="Rodando a matriz de cenários...")
 def _tabela(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
-            mare_m: float, conectividade: bool, semear_bordas: bool):
+            caminho_limiar_canais: str, caminho_cobertura: str,
+            mare_m: float, conectividade: bool, semear_bordas: bool,
+            usar_canais: bool):
+    """
+    Matriz cenário × horizonte × percentil. Cada linha roda DUAS vezes — sem
+    e com canal MapBiomas — para a tabela mostrar as áreas lado a lado
+    (nunca esconder o número sem canais atrás do novo).
+
+    IMPORTANTE: as duas colunas são FIXAS (margem d'água real sempre ativa
+    nas duas; canal MapBiomas só na coluna "com") e não dependem do estado
+    atual do toggle `usar_canais` na barra lateral — senão, com o toggle
+    desligado, as duas colunas sairiam idênticas e a comparação perderia o
+    sentido. `usar_canais` (parâmetro) entra só na chave do cache.
+    """
     d = _carregar(caminho)
     ma = (_carregar_mascara_agua(caminho_mascara_agua)
           if os.path.exists(caminho_mascara_agua) else None)
     lm = _carregar_limiar(caminho_limiar) if caminho_limiar else None
+    lm_c = _carregar_limiar(caminho_limiar_canais) if caminho_limiar_canais else None
+    mc_sem = _mascara_caminho_total(caminho, caminho_mascara_agua, caminho_cobertura, False)
+    mc_com = _mascara_caminho_total(caminho, caminho_mascara_agua, caminho_cobertura, True)
+
+    def _linha(cota_m):
+        m_sem = _mascara_auto(d, ma, lm, cota_m, conectividade, semear_bordas,
+                              usar_canais=False, mc=mc_sem)
+        e_sem = core.estatisticas_area(m_sem, d["dem"], d["area_pixel_m2"])
+        m_com = _mascara_auto(d, ma, lm, cota_m, conectividade, semear_bordas,
+                              usar_canais=True, mc=mc_com, lm_c=lm_c)
+        e_com = core.estatisticas_area(m_com, d["dem"], d["area_pixel_m2"])
+        return e_sem, e_com
 
     horizontes = (2050, 2100)
     percentis = ("mediana", "p83")
@@ -239,25 +325,27 @@ def _tabela(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
             for p in percentis:
                 nmrm = core.CENARIOS_AR6[nome][ano][p]
                 c = core.cota_limiar(nmrm, mare_m=mare_m)
-                m = _mascara_auto(d, ma, lm, c["cota_m"], conectividade, semear_bordas)
-                e = core.estatisticas_area(m, d["dem"], d["area_pixel_m2"])
+                e_sem, e_com = _linha(c["cota_m"])
                 linhas.append({
                     "Cenário": nome, "Horizonte": str(ano), "Percentil": p,
                     "NMRM (m)": nmrm, "Cota total (m)": round(c["cota_m"], 2),
-                    "Área inundada (km²)": round(e["area_inundada_km2"], 2),
-                    "% da área emersa": round(e["pct_inundada"], 2),
-                    "Depressões isoladas (km²)": round(e["area_isolada_km2"], 2),
+                    "Área inundada sem canais (km²)": round(e_sem["area_inundada_km2"], 2),
+                    "Área inundada com canais (km²)": round(e_com["area_inundada_km2"], 2),
+                    "% da área emersa (com canais)": round(e_com["pct_inundada"], 2),
+                    "Depressões isoladas sem canais (km²)": round(e_sem["area_isolada_km2"], 2),
+                    "Depressões isoladas com canais (km²)": round(e_com["area_isolada_km2"], 2),
                 })
     for nivel in core.NIVEIS_TURMA:
         c = core.cota_limiar(nivel, mare_m=mare_m)
-        m = _mascara_auto(d, ma, lm, c["cota_m"], conectividade, semear_bordas)
-        e = core.estatisticas_area(m, d["dem"], d["area_pixel_m2"])
+        e_sem, e_com = _linha(c["cota_m"])
         linhas.append({
             "Cenário": "Sensibilidade (turma)", "Horizonte": "—", "Percentil": "—",
             "NMRM (m)": nivel, "Cota total (m)": round(c["cota_m"], 2),
-            "Área inundada (km²)": round(e["area_inundada_km2"], 2),
-            "% da área emersa": round(e["pct_inundada"], 2),
-            "Depressões isoladas (km²)": round(e["area_isolada_km2"], 2),
+            "Área inundada sem canais (km²)": round(e_sem["area_inundada_km2"], 2),
+            "Área inundada com canais (km²)": round(e_com["area_inundada_km2"], 2),
+            "% da área emersa (com canais)": round(e_com["pct_inundada"], 2),
+            "Depressões isoladas sem canais (km²)": round(e_sem["area_isolada_km2"], 2),
+            "Depressões isoladas com canais (km²)": round(e_com["area_isolada_km2"], 2),
         })
     return pd.DataFrame(linhas)
 
@@ -317,6 +405,22 @@ limiar = _carregar_limiar(caminho_limiar) if caminho_limiar else None
 # pode derrubar a ferramenta.
 caminho_cobertura = FONTE.get("cobertura") or ""
 tem_cobertura = bool(caminho_cobertura and os.path.exists(caminho_cobertura))
+
+# v1.4 — canais MapBiomas (classe 33 — "Rio, Lago e Oceano") como caminho
+# hidráulico. No modo web usa-se o raster pré-computado COM canais; no modo
+# local, a máscara de caminho é calculada em cima da cobertura alinhada ao
+# MDE. Se nenhum dos dois existir, o controle correspondente fica desligado.
+# `canais_disponivel` só precisa saber se o CANAL MapBiomas existe (a máscara
+# final, que também soma a margem d'água — v1.4b —, só é montada mais abaixo,
+# depois que o toggle `usar_canais` existe; ver `_mascara_caminho_total`).
+caminho_limiar_canais = FONTE.get("limiar_canais") or ""
+limiar_canais = _carregar_limiar(caminho_limiar_canais) if caminho_limiar_canais else None
+
+if MODO_WEB:
+    canais_disponivel = limiar_canais is not None
+else:
+    canais_disponivel = tem_cobertura and (
+        _mascara_caminho(caminho, caminho_mascara_agua, caminho_cobertura) is not None)
 
 # O raster de limiar (modo web) só é confiável até um teto de cota. Não deixa
 # o slider de NMRM passar disso — além da grade o resultado congelaria em
@@ -470,6 +574,42 @@ semear_bordas = st.sidebar.toggle(
     help=("Fixado na geração dos dados leves — não editável nesta versão."
           if MODO_WEB else "Evita confinamento artificial quando o "
           "recorte corta a planície."))
+
+# v1.4 — canal MapBiomas (classe 33) como caminho hidráulico: conduz a água,
+# mas não injeta sozinho (uma lagoa interior sem ligação com o mar não vira
+# fonte falsa). Só faz sentido com a conectividade ligada, e só existe
+# quando há cobertura (modo local) ou o raster de limiar com canais (modo
+# web) — nos dois casos ausentes, o controle fica desligado com o motivo.
+_motivo_canais_indisponivel = None
+if not conectividade:
+    _motivo_canais_indisponivel = "exige a conectividade hidráulica ligada."
+elif not canais_disponivel:
+    _motivo_canais_indisponivel = (
+        "raster `limiar_conexao_canais_web.tif` ausente — rode "
+        "`03_prepara_dem_web.py`." if MODO_WEB else
+        "cobertura MapBiomas ausente — rode `04_prepara_cobertura.py`.")
+
+usar_canais = st.sidebar.toggle(
+    "Canais (MapBiomas) como caminho da água", value=True,
+    disabled=(not conectividade) or (not canais_disponivel),
+    help=(
+        "Canal MapBiomas (classe 33 — Rio, Lago e Oceano), fora da máscara "
+        "de água, CONDUZ a água até "
+        f"+{core.CONFIG_INUNDACAO['caminho_cota_max_m']:.1f} m de cota — não "
+        "injeta água sozinho, então uma lagoa interior sem ligação com o mar "
+        "não vira conexão falsa. A margem d'água real (pixel majoritariamente "
+        "terra mas com água real na borda) já conduz conexão sempre, "
+        "independente deste toggle — ele controla só a camada extra do "
+        "MapBiomas. "
+        + (f"Indisponível: {_motivo_canais_indisponivel}"
+           if _motivo_canais_indisponivel else "Ligado por padrão.")
+    ))
+
+# v1.4b — a máscara de caminho final (margem d'água real, sempre, + canal
+# MapBiomas, só se usar_canais) só pode ser montada agora que o toggle acima
+# existe. No modo web ela vem embutida nos rasters de limiar (None aqui).
+mascara_caminho_arr = _mascara_caminho_total(
+    caminho, caminho_mascara_agua, caminho_cobertura, usar_canais)
 # "Mancha" = grupo de pixels vizinhos (conectividade 8) que caíram na MESMA
 # classe. O filtro roda depois da classificação e vale para as duas classes,
 # inundada e depressão isolada. É um filtro de RUÍDO do MDE, não de ciência:
@@ -576,7 +716,9 @@ largura_figura = st.sidebar.slider(
 mascaras = fonte.mascara_inundacao_auto(
     core, dados, cota["cota_m"],
     conectividade=conectividade, semear_bordas=semear_bordas,
-    area_minima_ha=area_min, mascara_agua=mascara_agua, limiar=limiar)
+    area_minima_ha=area_min, mascara_agua=mascara_agua, limiar=limiar,
+    usar_canais=usar_canais, mascara_caminho=mascara_caminho_arr,
+    limiar_canais=limiar_canais)
 
 est = core.estatisticas_area(mascaras, dados["dem"], dados["area_pixel_m2"])
 hs = _hillshade(caminho, exagero)
@@ -586,9 +728,16 @@ hs = _hillshade(caminho, exagero)
 # PAINEL PRINCIPAL
 # =============================================================================
 
+_estado_hidrologia = (
+    "sem teste de conectividade (bathtub)" if not conectividade else
+    (f"conectividade: ligada · canais MapBiomas 33 como caminho "
+     f"(≤ {core.CONFIG_INUNDACAO['caminho_cota_max_m']:.1f} m)"
+     if usar_canais and canais_disponivel else "conectividade: ligada · sem canais"))
+
 st.title("Exposição ao Nível Médio Relativo do Mar — Caravelas (BA)")
 st.caption(f"{rotulo_cen} · datum {core.NIVEIS_MARE[chave_mare]['rotulo']} · "
-           f"cota total **{cota['cota_m']:.2f} m** sobre o {core.CONFIG_DEM['datum_vertical']}")
+           f"cota total **{cota['cota_m']:.2f} m** sobre o {core.CONFIG_DEM['datum_vertical']} · "
+           f"{_estado_hidrologia}")
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Área emersa atual", f"{est['area_terra_km2']:,.1f} km²")
@@ -751,8 +900,9 @@ with aba_mapa_web:
         }
         t0 = time.perf_counter()
         png_uri, bounds_web = _overlay_web(
-            caminho, caminho_mascara_agua, caminho_limiar, cota["cota_m"],
-            conectividade, semear_bordas, area_min, cores_overlay)
+            caminho, caminho_mascara_agua, caminho_limiar, caminho_limiar_canais,
+            caminho_cobertura, cota["cota_m"], conectividade, semear_bordas,
+            usar_canais, area_min, cores_overlay)
         t_overlay_ms = (time.perf_counter() - t0) * 1000
 
     # O enquadramento vem sempre do MDE, não da camada ligada no momento:
@@ -962,7 +1112,10 @@ with aba_mapa:
                 "figura para imprimir.")
 
     subtitulo = (f"{rotulo_cen} · cota {cota['cota_m']:.2f} m · "
-                 f"{'com' if conectividade else 'SEM'} teste de conectividade")
+                 f"{'com' if conectividade else 'SEM'} teste de conectividade"
+                 + (f" · canais MapBiomas 33 como caminho "
+                    f"(≤ {core.CONFIG_INUNDACAO['caminho_cota_max_m']:.1f} m)"
+                    if conectividade and usar_canais and canais_disponivel else ""))
     fig, ax = core.figura_mapa(dados, mascaras, cota, subtitulo=subtitulo,
                                mostrar_isoladas=mostrar_isoladas, fundo=fundo,
                                hs=hs, tema=tema_figura,
@@ -1010,9 +1163,10 @@ with aba_curva:
     # extensão do eixo realmente vai acontecer; abaixo disso vai None e a
     # curva volta a ser cacheada como era antes da v1.2.
     _topo_curva = float(nmrm) if nmrm > CONFIG_UI["nmrm_max"] else None
-    df_curva = _curva(caminho, caminho_mascara_agua, caminho_limiar, mare,
-                      conectividade, semear_bordas, CONFIG_UI["curva_passo"],
-                      topo=_topo_curva)
+    df_curva = _curva(caminho, caminho_mascara_agua, caminho_limiar,
+                      caminho_limiar_canais, caminho_cobertura, mare,
+                      conectividade, semear_bordas, usar_canais,
+                      CONFIG_UI["curva_passo"], topo=_topo_curva)
     if nmrm > CONFIG_UI["nmrm_max"]:
         st.caption(
             f"Eixo estendido até +{nmrm:.2f} m para acompanhar o modo Manual. "
@@ -1048,9 +1202,16 @@ with aba_curva:
 # ---- Tabela -----------------------------------------------------------------
 with aba_tabela:
     st.markdown("Matriz cenário × horizonte × percentil, mais os níveis de "
-                "sensibilidade definidos pela turma.")
-    df_tab = _tabela(caminho, caminho_mascara_agua, caminho_limiar, mare,
-                     conectividade, semear_bordas)
+                "sensibilidade definidos pela turma. As áreas aparecem "
+                "**sem** e **com** canais MapBiomas como caminho hidráulico "
+                f"(classe 33, até {core.CONFIG_INUNDACAO['caminho_cota_max_m']:.1f} m) "
+                "lado a lado — nenhum dos dois números substitui o outro.")
+    if not conectividade:
+        st.caption("Conectividade desligada: as duas colunas de área inundada "
+                   "coincidem com o bathtub, e canais não fazem diferença.")
+    df_tab = _tabela(caminho, caminho_mascara_agua, caminho_limiar,
+                     caminho_limiar_canais, caminho_cobertura, mare,
+                     conectividade, semear_bordas, usar_canais)
     st.dataframe(df_tab, width="stretch", hide_index=True)
     st.download_button("⬇️ Baixar tabela (CSV)",
                        df_tab.to_csv(index=False).encode("utf-8-sig"),
@@ -1060,6 +1221,24 @@ with aba_tabela:
 with aba_meta:
     st.subheader("Decomposição da cota")
     st.table({k: [f"{v:+.3f} m"] for k, v in cota["parcelas"].items()})
+
+    st.subheader("Conectividade hidráulica")
+    st.markdown(f"**Estado atual:** {_estado_hidrologia}.")
+    st.markdown(
+        "Canal MapBiomas (classe 33 — Rio, Lago e Oceano), fora da máscara de "
+        "água, é tratado como **caminho**: conduz a água através dele, mas "
+        "**não é fonte** — uma lagoa interior sem ligação com o mar não passa "
+        "a alagar tudo ao redor só por estar na mesma classe. Só conta como "
+        "caminho até "
+        f"**+{core.CONFIG_INUNDACAO['caminho_cota_max_m']:.1f} m** de cota "
+        "FABDEM (salvaguarda: evita religar uma depressão distante através de "
+        "um lago ou rio no alto do tabuleiro Barreiras)."
+        + ("" if canais_disponivel else
+           "\n\n**Indisponível nesta sessão:** " +
+           ("rode `03_prepara_dem_web.py` para gerar "
+            "`limiar_conexao_canais_web.tif`." if MODO_WEB else
+            "rode `04_prepara_cobertura.py` para gerar a cobertura MapBiomas "
+            "alinhada ao MDE.")))
 
     st.subheader("Raster")
     st.json({
@@ -1146,9 +1325,17 @@ with aba_meta:
         "como a de Caravelas isso tende a **superestimar** a perda.\n"
         "- Os valores SSP são **globais**; substituir pelos valores locais de NMRM "
         "(NASA/IPCC AR6 Sea Level Projection Tool, Garner et al.).\n"
-        "- A camada de **cobertura MapBiomas** é ilustrativa nesta versão: não "
-        "entra em nenhum cálculo, e a classificação a 30 m não separa as "
-        "fitofisionomias de restinga que o laudo do Cassurubá distingue em campo.\n"
+        "- A camada de **cobertura MapBiomas** é visual, com uma exceção pontual "
+        "desde a v1.4: canais (classe 33) podem servir de caminho hidráulico na "
+        "conectividade (ver aba Conectividade hidráulica acima). Nenhum "
+        "cruzamento de ÁREA POR CLASSE é feito — isso é a Parte 2 — e a "
+        "classificação a 30 m não separa as fitofisionomias de restinga que o "
+        "laudo do Cassurubá distingue em campo.\n"
+        "- **Degrau de dossel nas margens de canal não foi corrigido.** A "
+        "correção da máscara de água (v1.4) resolve o teste do 0,0 exato na "
+        "grade nativa, mas não remove o resíduo de dossel de mata ciliar/mangue "
+        "que ainda eleva a cota lida bem na margem de canais e do manguezal — "
+        "decisão: fora de escopo nesta versão.\n"
         "- **Viés de dossel sobre manguezal.** O cruzamento FABDEM × MapBiomas "
         "(set/2026) mostrou o mangue em cota mediana de 4,3 m e o apicum em 1,9 m — "
         "ordem invertida em relação à zonação de maré. O resíduo de dossel sobre "

@@ -1,6 +1,6 @@
 {
   "projeto": "26.09 — Simulador NMRM Caravelas",
-  "gerado_em": "2026-08-27 12:35:28",
+  "gerado_em": "2026-09-16 22:03:29",
   "resolucao_m": [
     30.0,
     30.0
@@ -30,6 +30,10 @@
     "limiar_troca_passo_m": 5.5,
     "conectividade": 8,
     "semear_bordas": true,
+    "classes_caminho": [
+      33
+    ],
+    "caminho_cota_max_m": 6.0,
     "nodata_saida": -32768,
     "fator_escala": 100.0,
     "nunca_alaga": 32767,
@@ -37,18 +41,23 @@
     "predictor": 2,
     "nivel_zlib": 9,
     "tamanho_bloco": 512,
-    "ref_area_abaixo_2m_km2": 70.6,
+    "ref_area_abaixo_2m_km2": 59.8,
     "tolerancia_validacao": 0.02
   },
   "diagnostico_recorte": {
-    "area_abaixo_2m_completo_km2": 70.62,
-    "area_abaixo_2m_recorte_km2": 70.62,
+    "area_abaixo_2m_completo_km2": 59.81,
+    "area_abaixo_2m_recorte_km2": 59.81,
     "diferenca_relativa": 0.0,
     "reducao_pixels": 1.0,
     "dimensoes_km": [
       65.8,
       69.8
     ]
+  },
+  "referencia_area_abaixo_2m": {
+    "v1_3_km2": 59.8,
+    "v1_4b_km2": 59.81,
+    "motivo": "mascara de agua passou a ser detectada na grade nativa, com agua_area por Resampling.average (limiar 0.5) — Partes 1 e 1.4b da v1.4"
   },
   "niveis_pre_computados_cm": [
     0,
@@ -221,48 +230,68 @@
     1975,
     2000
   ],
+  "margem_agua": {
+    "disponivel": true,
+    "conceito": "agua_conexao (Resampling.max) & ~agua_area (Resampling.average >= 0.5): fica terra na area (cota real preservada), mas conduz conexao — sempre ativa, sem salvaguarda de cota (agua real)."
+  },
+  "canais": {
+    "disponivel": true,
+    "classes_caminho": [
+      33
+    ],
+    "caminho_cota_max_m": 6.0,
+    "conceito": "canal MapBiomas = caminho (conduz), nunca fonte (nao injeta agua sozinho); so conta ate a cota de salvaguarda, para nao religar depressoes distantes atraves de lago/rio alto no tabuleiro Barreiras. Soma-se a margem_agua por uniao no raster 'com canais'."
+  },
   "tabela_conferencia": [
     {
       "nivel_m": 0.5,
-      "bathtub_km2": 4.91,
-      "conectado_km2": 4.33
+      "bathtub_km2": 0.85,
+      "conectado_km2": 0.59,
+      "conectado_canais_km2": 0.7
     },
     {
       "nivel_m": 1.0,
-      "bathtub_km2": 8.55,
-      "conectado_km2": 7.0
+      "bathtub_km2": 1.92,
+      "conectado_km2": 0.94,
+      "conectado_canais_km2": 1.2
     },
     {
       "nivel_m": 1.5,
-      "bathtub_km2": 25.6,
-      "conectado_km2": 10.87
+      "bathtub_km2": 16.63,
+      "conectado_km2": 2.34,
+      "conectado_canais_km2": 4.86
     },
     {
       "nivel_m": 2.0,
-      "bathtub_km2": 71.13,
-      "conectado_km2": 27.84
+      "bathtub_km2": 60.31,
+      "conectado_km2": 17.92,
+      "conectado_canais_km2": 20.0
     },
     {
       "nivel_m": 3.0,
-      "bathtub_km2": 194.58,
-      "conectado_km2": 119.59
+      "bathtub_km2": 182.37,
+      "conectado_km2": 107.72,
+      "conectado_canais_km2": 140.56
     },
     {
       "nivel_m": 5.0,
-      "bathtub_km2": 457.83,
-      "conectado_km2": 441.23
+      "bathtub_km2": 444.9,
+      "conectado_km2": 428.85,
+      "conectado_canais_km2": 428.89
     },
     {
       "nivel_m": 10.0,
-      "bathtub_km2": 856.22,
-      "conectado_km2": 852.06
+      "bathtub_km2": 844.59,
+      "conectado_km2": 840.44,
+      "conectado_canais_km2": 840.44
     }
   ],
-  "tamanho_total_mb": 2.33,
+  "tamanho_total_mb": 3.07,
   "observacoes": [
     "Elevacao em centimetros (int16). Dividir por 100 para metros.",
     "Terreno acima de +20 m foi achatado (TETO). Cenarios acima desse valor nao sao validos.",
     "limiar == 32767 indica pixel que nunca conecta ao oceano ate +20 m.",
+    "limiar_conexao_web.tif = margem d'agua real (se disponivel), sem canal MapBiomas. limiar_conexao_canais_web.tif (se presente) = o mesmo, UNIAO com canal MapBiomas classe 33 como caminho hidraulico.",
     "Dado derivado do FABDEM V1-2 (Hawker et al. 2022) — CC BY-NC-SA 4.0. O derivado herda a mesma licenca e a restricao de uso nao comercial."
   ]
 }

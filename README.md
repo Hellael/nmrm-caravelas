@@ -51,8 +51,10 @@ nmrm-caravelas/
 ├── 05_valida_cobertura_elevacao.py  # cobertura x elevação (FABDEM completo)
 ├── docs/
 │   ├── logica_da_ferramenta.md        # como a ferramenta raciocina, ponta a ponta
-│   └── validacao_mapbiomas_laudo.md   # cobertura x Laudo biológico do Cassurubá
+│   ├── validacao_mapbiomas_laudo.md   # cobertura x Laudo biológico do Cassurubá
+│   └── v1.4_notas_tecnicas.md         # máscara de água (área x conexão) + canais MapBiomas
 ├── teste_sintetico.py         # valida o pipeline sem precisar do FABDEM
+├── teste_conectividade.py     # testa a máscara nativa, a margem d'água e os canais MapBiomas (v1.4b)
 ├── dados/                     # entradas (NÃO versionar — FABDEM é CC BY-NC-SA)
 │   ├── fabdem/                # tiles brutos .tif
 │   ├── auxiliar/              # MapBiomas, GEBCO, maregrafia
@@ -108,12 +110,14 @@ streamlit run 02_simulador_nmrm.py
 
 É o modo do deploy no **Streamlit Community Cloud** e roda em qualquer clone
 sem o download do FABDEM. `03_prepara_dem_web.py` produz, a partir do MDE
-processado, três rasters de 30 m recortados à planície: DEM em `int16`
-(centímetros), máscara de água, e um **raster de limiar de conexão
-hidráulica pré-computado** — cada pixel guarda a menor cota de mar em que
-passa a estar inundado *e* conectado ao oceano. Isso substitui o flood-fill
-em tempo real por uma consulta `limiar <= cota`, mantendo os mesmos números
-(validado pixel a pixel). O conjunto todo fica em ~2,3 MB.
+processado, rasters de 30 m recortados à planície: DEM em `int16`
+(centímetros), máscara de água, e **dois rasters de limiar de conexão
+hidráulica pré-computados** — um com a margem d'água real como caminho
+(sempre ativa) e outro com a margem MAIS o canal MapBiomas (v1.4b) — cada
+pixel guarda a menor cota de mar em que passa a estar inundado *e* conectado
+ao oceano. Isso substitui o flood-fill em tempo
+real por uma consulta `limiar <= cota`, mantendo os mesmos números (validado
+pixel a pixel, nos dois rasters). O conjunto todo fica em ~3 MB.
 
 ```powershell
 # Basta ter dados_web/ no repositório (já versionado). Sem NMRM_DIR_DADOS:
@@ -206,6 +210,44 @@ MDE, em `dados/auxiliar/` e em `dados_web/`. A camada aparece no mapa
 interativo; se o recorte não existir, o controle fica desligado e a simulação
 segue normalmente.
 
+## Novidades da v1.4b
+
+- **Máscara de água corrigida na origem, em DUAS camadas.** A v1.3 detectava
+  o 0,0 exato do FABDEM *depois* de reprojetar por bilinear — o que
+  misturava o 0,0 da água com a cota da margem e apagava canais de 1–2
+  pixels de largura. Agora a água é detectada e zerada **na grade nativa
+  (WGS84), antes** da reprojeção, e reprojetada **duas vezes**, para
+  propósitos diferentes:
+  - `agua_area` — `Resampling.average`, limiar **≥ 0,5** da fração de água
+    no pixel de 30 m. Só sai da terra o pixel cuja MAIORIA da área é água de
+    verdade; é o que mascara o MDE.
+  - `agua_conexao` — `Resampling.max`. Qualquer fração de água já conta
+    para fins de CONEXÃO hidráulica.
+
+  A diferença — pixel que fica como **terra** na área, mas com água real
+  suficiente para **conduzir conexão** — é a MARGEM d'água (soma-se ao
+  caminho hidráulico, junto com o canal MapBiomas, ver abaixo). Área emersa
+  final: **2.429,4 km²**. Uma etapa intermediária só com `Resampling.max`
+  puro (sem separar área de conexão) foi testada e descartada: tirava da
+  conta de área todo pixel com qualquer fração de água real, mesmo sendo
+  majoritariamente terra — ver `docs/v1.4_notas_tecnicas.md`.
+- **Canais do MapBiomas (classe 33) viram caminho hidráulico.** Um canal
+  fora da máscara de água **conduz** a água na conectividade (entra no
+  flood-fill), mas **nunca é fonte** — uma lagoa interior sem ligação com o
+  mar, também classe 33, não passa a inundar tudo ao redor só por estar na
+  mesma classe. Só conta até **+6,0 m** de cota (teto dos terraços
+  holocênicos de Andrade et al. 2003), para não religar uma depressão
+  distante através de um lago no alto do tabuleiro Barreiras. Soma-se à
+  margem d'água real por união — a margem é sempre ativa; o canal MapBiomas
+  é opcional. Toggle na barra lateral — **"Canais (MapBiomas) como caminho
+  da água"**, ligado por padrão — e a aba Matriz de cenários mostra a área
+  inundada/isolada **sem** e **com** canal MapBiomas lado a lado (a margem
+  entra nas duas colunas). No modo web, dois rasters de limiar
+  pré-computados (`limiar_conexao_web.tif` = margem sozinha,
+  `limiar_conexao_canais_web.tif` = margem + canal).
+- Detalhe técnico completo, números medidos e um bug real de GDAL/rasterio
+  encontrado no caminho: `docs/v1.4_notas_tecnicas.md`.
+
 ## Novidades da v1.3
 
 - **O mapa interativo virou a aba principal.** A figura de 300 dpi passou para a
@@ -294,11 +336,15 @@ Ajustes vindos da apresentação ao grupo:
   ainda pode superar o próprio sinal de NMRM simulado. Não substituir por
   SRTM / Copernicus GLO-30 bruto / Terrain-RGB: nesse terreno o problema
   seria maior.
-- **Máscara de água incompleta em rios estreitos.** A conectividade
-  hidráulica propaga a partir dos pixels de oceano/estuário codificados como
-  `0.0` exato no FABDEM. Canais e gamboas com menos de ~1 pixel de largura
-  podem não estar nessa máscara, subestimando a via de propagação estuário
-  adentro.
+- **Máscara de água em rios estreitos (parcialmente corrigido na v1.4b).** A
+  conectividade propaga a partir da água de área (`agua_area`, majoritária
+  no pixel), da margem d'água real (`agua_conexao & ~agua_area` — pixel
+  minoritariamente água que conduz sem sair da área) e, desde a v1.4, dos
+  canais classificados pelo MapBiomas (classe 33) até +6,0 m de cota. O que
+  ainda falta: gamboas mais estreitas que 1 pixel nativo de qualquer forma, e
+  o degrau de dossel de mata ciliar/mangue nas margens de canal (o FABDEM
+  ainda mede o topo da vegetação ribeirinha ali) — nenhum dos dois foi
+  tratado, por decisão. Ver `docs/v1.4_notas_tecnicas.md` §9.
 - **Cruzamento com MapBiomas ainda não implementado** (Parte 2 — resposta
   ecológica). A v1 entrega só a camada física de exposição.
 - Todo produto declara suas limitações no rodapé da figura e na aba de

@@ -34,6 +34,33 @@ NOTA DE DATUM
     com o oceano aberto. Limitação real, porém marginal (~0,05%), não uma
     incógnita.
 
+NOTA DE MÁSCARA DE ÁGUA (v1.4)
+    A detecção do 0.0 exato do FABDEM é feita na GRADE NATIVA (WGS84), logo
+    após o mosaico — antes de qualquer reamostragem. Fazer esse teste depois
+    do bilinear (como a v1.3 fazia) mistura o 0.0 da água com a cota da
+    margem na interpolação, e o pixel deixa de ser exatamente 0.0: a máscara
+    perde ~1 px em toda margem e canais de 1-2 px de largura somem por
+    completo. Aqui a água vira NaN ANTES da reprojeção (então o bilinear do
+    terreno nunca a enxerga).
+
+NOTA DE DUAS MÁSCARAS — ÁREA x CONEXÃO (v1.4b)
+    A água nativa é reprojetada DUAS vezes, com propósitos diferentes:
+
+      agua_area    : Resampling.average sobre a máscara em float32 (0.0/1.0),
+                     testada contra CONFIG_01["limiar_agua_area"] (0.5). Só
+                     sai da terra o pixel cuja MAIORIA da área é água de
+                     verdade — é o que mascara o DEM e vira config.MASCARA_AGUA.
+      agua_conexao : Resampling.max (CONFIG_01["reamostragem_agua"]). Qualquer
+                     fração de água já conta para fins de CONEXÃO.
+
+    A diferença `agua_conexao & ~agua_area` é a MARGEM: pixel que fica como
+    TERRA na área (o DEM preserva a cota real), mas tem água real suficiente
+    para conduzir a conexão hidráulica. Grava-se em config.MASCARA_MARGEM e
+    soma-se ao caminho hidráulico em slr_core.mascara_caminho (mesmas regras
+    do canal MapBiomas — conduz, não é fonte — mas SEM a salvaguarda de cota,
+    porque aqui é água real medida no próprio FABDEM, não uma classe de
+    cobertura que pode estar longe do mar).
+
 Autor: Helio | Assistência: Claude
 """
 
@@ -59,6 +86,18 @@ from src.slr_core import CONFIG_MAPA, hillshade
 
 CONFIG_01 = {
     "reamostragem":     Resampling.bilinear,
+    # A máscara de água é CATEGÓRICA (0/1), não uma grandeza contínua como o
+    # terreno. `max` em vez de `nearest`/`bilinear`: qualquer fração de água
+    # dentro do pixel de 30 m de destino marca o pixel inteiro como água —
+    # é a escolha conservadora para não fechar em silêncio um canal estreito
+    # que caiu exatamente na fronteira de dois pixels da grade nativa.
+    "reamostragem_agua": Resampling.max,
+    # Limiar da reprojeção por Resampling.average (fração de água no pixel de
+    # 30 m) que decide se o pixel SAI da terra e vira config.MASCARA_AGUA.
+    # 0.5 = maioria da área. Abaixo disso, se ainda houver água (agua_conexao),
+    # o pixel vira MARGEM: fica terra, mas conduz conexão. Ver a nota de
+    # "duas máscaras" no topo do arquivo.
+    "limiar_agua_area": 0.5,
     "valor_oceano":     0.0,
     "tol_oceano":       1e-6,
     "nodata_saida":     -9999.0,
@@ -146,11 +185,23 @@ def mosaicar_e_recortar() -> tuple:
 
 
 # =============================================================================
-# 2. REPROJEÇÃO PARA UTM 24S
+# 2. MÁSCARA DE ÁGUA NA GRADE NATIVA + REPROJEÇÃO PARA UTM 24S
 # =============================================================================
 
-def reprojetar(dem: np.ndarray, transform) -> tuple:
-    """Reprojeta para EPSG:31984 na resolução alvo. Retorna (array, transform)."""
+def detectar_agua_nativa(dem: np.ndarray) -> np.ndarray:
+    """
+    Água (oceano/estuário) do FABDEM: pixel 0.0 exato, testado NA GRADE
+    NATIVA (WGS84), antes de qualquer reamostragem — ver "NOTA DE MÁSCARA DE
+    ÁGUA" no topo do arquivo.
+    """
+    return np.isclose(dem, CONFIG_01["valor_oceano"],
+                      atol=CONFIG_01["tol_oceano"], equal_nan=False)
+
+
+def _reprojetar_array(dem: np.ndarray, transform, resampling) -> tuple:
+    """Núcleo da reprojeção do terreno, sem print — reaproveitado por
+    `reprojetar()` e pelo diagnóstico do método antigo (só para o print de
+    comparação de área de água, não entra em nenhum cálculo)."""
     altura, largura = dem.shape
     bbox = config.BBOX_WGS84
 
@@ -167,55 +218,181 @@ def reprojetar(dem: np.ndarray, transform) -> tuple:
         src_transform=transform, src_crs=config.CRS_FONTE,
         dst_transform=transform_alvo, dst_crs=config.CRS_ALVO,
         src_nodata=np.nan, dst_nodata=np.nan,
-        resampling=CONFIG_01["reamostragem"],
+        resampling=resampling,
     )
-
-    print(f"[2/5] reprojetado para {config.CRS_ALVO}: "
-          f"{alt_alvo}x{larg_alvo} px @ {config.RESOLUCAO_M:.0f} m")
     return destino, transform_alvo
+
+
+def reprojetar(dem: np.ndarray, transform) -> tuple:
+    """Reprojeta o terreno para EPSG:31984 na resolução alvo (bilinear).
+    Retorna (array, transform). Chamar com a água já zerada para NaN."""
+    destino, transform_alvo = _reprojetar_array(dem, transform, CONFIG_01["reamostragem"])
+    print(f"[2/5] reprojetado para {config.CRS_ALVO}: "
+          f"{destino.shape[0]}x{destino.shape[1]} px @ {config.RESOLUCAO_M:.0f} m")
+    return destino, transform_alvo
+
+
+def reprojetar_mascaras_agua(mascara_nativa: np.ndarray, transform_nativa,
+                             transform_alvo, shape_alvo: tuple) -> tuple:
+    """
+    Reprojeta a água nativa (grade WGS84) para a grade UTM do terreno DUAS
+    vezes, com propósitos diferentes — ver "NOTA DE DUAS MÁSCARAS" no topo
+    do arquivo:
+
+        agua_area    : Resampling.average sobre a máscara em float32, testada
+                       contra CONFIG_01["limiar_agua_area"] (0.5). Conservador
+                       — só sai da terra o pixel cuja MAIORIA da área é água.
+        agua_conexao : Resampling.max (CONFIG_01["reamostragem_agua"]).
+                       Qualquer fração de água já conta para conexão.
+        agua_margem  : agua_conexao & ~agua_area — fica como terra na área,
+                       mas conduz conexão hidráulica (vira "caminho").
+
+    Reaproveita `transform_alvo`/`shape_alvo` já calculados pela reprojeção
+    do terreno — mesma grade exata, sem recomputar `calculate_default_transform`.
+
+    NÃO passar `dst_nodata` aqui: com `src_nodata=None`, declarar `dst_nodata`
+    faz o GDAL tratar esse valor como nodata também na leitura/reamostragem —
+    em `Resampling.max`/`average`/`nearest` isso corrompe o resultado
+    (testado: praticamente todo pixel de destino virava "água", mesmo com a
+    fonte majoritariamente 0). Como todo pixel de origem já é 0.0 ou 1.0
+    (nunca "sem dado"), não existe nodata real a declarar; os arrays de
+    destino já nascem zerados, que é o preenchimento correto fora do domínio.
+    """
+    fracao = np.zeros(shape_alvo, dtype="float32")
+    reproject(
+        source=mascara_nativa.astype("float32"), destination=fracao,
+        src_transform=transform_nativa, src_crs=config.CRS_FONTE,
+        dst_transform=transform_alvo, dst_crs=config.CRS_ALVO,
+        resampling=Resampling.average,
+    )
+    agua_area = fracao >= CONFIG_01["limiar_agua_area"]
+
+    destino_max = np.zeros(shape_alvo, dtype="uint8")
+    reproject(
+        source=mascara_nativa.astype("uint8"), destination=destino_max,
+        src_transform=transform_nativa, src_crs=config.CRS_FONTE,
+        dst_transform=transform_alvo, dst_crs=config.CRS_ALVO,
+        resampling=CONFIG_01["reamostragem_agua"],
+    )
+    agua_conexao = destino_max.astype(bool)
+
+    agua_margem = agua_conexao & ~agua_area
+
+    print(f"[2/5] agua_area (average >= {CONFIG_01['limiar_agua_area']:.2f}): "
+          f"{int(agua_area.sum())} px na grade UTM")
+    print(f"[2/5] agua_conexao (Resampling.max): {int(agua_conexao.sum())} px na grade UTM")
+    print(f"[2/5] agua_margem (conexao & ~area): {int(agua_margem.sum())} px na grade UTM "
+          "— fica terra na área, conduz conexão")
+
+    return agua_area, agua_conexao, agua_margem
 
 
 # =============================================================================
 # 3. MÁSCARA DE OCEANO E GRAVAÇÃO
 # =============================================================================
 
-def _exportar_mascara_agua(mask_oceano: np.ndarray, transform) -> None:
+def _exportar_mascara_agua(agua_area: np.ndarray, transform) -> None:
     """
-    Grava a máscara de água (uint8, 1=água, 0=terra) na mesma grade do MDE.
+    Grava a máscara de água DE ÁREA (uint8, 1=água, 0=terra) na mesma grade
+    do MDE — a que decide o que sai da terra e vira nodata no MDE_PROCESSADO.
 
     Existe porque `mascarar_e_salvar` converte pixels de água em NaN e, na
     escrita, em nodata (-9999) — igual ao sentinela usado para "fora do
     bbox, sem tile". O MDE_PROCESSADO sozinho não permite mais distinguir
-    as duas coisas; esta máscara preserva a identidade "isto era água"
-    capturada aqui, antes desse round-trip apagar o valor 0.0 exato.
+    as duas coisas; esta máscara preserva a identidade "isto era água".
+
+    Recebida já PRONTA (`agua_area` de `reprojetar_mascaras_agua`: reamostragem
+    `Resampling.average` sobre a água nativa, testada contra o limiar de 0.5).
     """
     perfil = {
-        "driver": "GTiff", "height": mask_oceano.shape[0], "width": mask_oceano.shape[1],
+        "driver": "GTiff", "height": agua_area.shape[0], "width": agua_area.shape[1],
         "count": 1, "dtype": "uint8", "crs": config.CRS_ALVO,
         "transform": transform, "nodata": None,
         "compress": CONFIG_01["compressao"], "tiled": True,
     }
     with rasterio.open(config.MASCARA_AGUA, "w", **perfil) as dst:
-        dst.write(mask_oceano.astype("uint8"), 1)
+        dst.write(agua_area.astype("uint8"), 1)
         dst.update_tags(
-            descricao="1=agua (oceano/estuario/corpo d'agua, dem==0.0 exato no FABDEM), 0=terra",
+            descricao=(
+                "1=agua (oceano/estuario/corpo d'agua, dem==0.0 exato no FABDEM), "
+                "0=terra. Detectada na grade NATIVA (WGS84), antes da reprojecao, "
+                "e reamostrada para a grade UTM com Resampling.average, limiar "
+                f">= {CONFIG_01['limiar_agua_area']:.2f} da fracao de agua no "
+                "pixel de 30 m (agua_area). Pixels com menos agua que isso mas "
+                "ainda com alguma ficam na margem — ver caravelas_mascara_margem_*."
+            ),
             gerado_em=datetime.now().isoformat(timespec="seconds"),
         )
     print(f"[3/5] máscara de água salva: {config.MASCARA_AGUA} "
-          f"({int(mask_oceano.sum())} px de água)")
+          f"({int(agua_area.sum())} px de água)")
 
 
-def mascarar_e_salvar(dem: np.ndarray, transform) -> np.ndarray:
-    """Marca oceano (0.0 exato) como NaN e grava o GeoTIFF processado."""
-    mask_oceano = np.isclose(dem, CONFIG_01["valor_oceano"],
-                             atol=CONFIG_01["tol_oceano"], equal_nan=False)
+def _exportar_mascara_margem(agua_margem: np.ndarray, transform) -> None:
+    """
+    Grava a máscara de MARGEM d'água (uint8, 1=margem, 0=demais) — pixels que
+    NÃO entraram em agua_area (ficam como terra, com a cota real do MDE) mas
+    têm água real suficiente (Resampling.max) para conduzir a conexão
+    hidráulica. Consumida por `03_prepara_dem_web.py` e por
+    `slr_core.mascara_caminho`: soma-se ao caminho por canal MapBiomas, com
+    as mesmas regras (conduz, nunca é fonte), mas SEM a salvaguarda de cota
+    do canal — é água real medida no próprio FABDEM, não uma classe de
+    cobertura que pode estar longe do mar.
+    """
+    perfil = {
+        "driver": "GTiff", "height": agua_margem.shape[0], "width": agua_margem.shape[1],
+        "count": 1, "dtype": "uint8", "crs": config.CRS_ALVO,
+        "transform": transform, "nodata": None,
+        "compress": CONFIG_01["compressao"], "tiled": True,
+    }
+    with rasterio.open(config.MASCARA_MARGEM, "w", **perfil) as dst:
+        dst.write(agua_margem.astype("uint8"), 1)
+        dst.update_tags(
+            descricao=(
+                "1=margem d'agua (agua_conexao & ~agua_area): fica como terra "
+                "na area (dem preserva a cota real) mas conduz conexao "
+                "hidraulica em slr_core.mascara_caminho. 0=demais."
+            ),
+            gerado_em=datetime.now().isoformat(timespec="seconds"),
+        )
+    print(f"[3/5] máscara de margem salva: {config.MASCARA_MARGEM} "
+          f"({int(agua_margem.sum())} px de margem)")
+
+
+def mascarar_e_salvar(dem: np.ndarray, agua_area: np.ndarray, agua_margem: np.ndarray,
+                      transform, agua_antiga_diagnostico: np.ndarray = None,
+                      agua_conexao_diagnostico: np.ndarray = None) -> np.ndarray:
+    """
+    Aplica `agua_area` (já pronta — ver `reprojetar_mascaras_agua`) e grava o
+    GeoTIFF processado, mais as duas máscaras (área e margem).
+
+    `agua_antiga_diagnostico`: máscara pelo método antigo (isclose pós-bilinear
+    da v1.3), só para o print comparativo. `agua_conexao_diagnostico`: a
+    máscara por Resampling.max (antes de subtrair a área), idem — nenhum dos
+    dois participa de cálculo.
+    """
     dem = dem.copy()
-    dem[mask_oceano] = np.nan
+    # Coerência: um pixel nunca é terra e água ao mesmo tempo — a MARGEM fica
+    # como terra de propósito (só conduz conexão, não sai da área).
+    dem[agua_area] = np.nan
 
     n_terra = int(np.isfinite(dem).sum())
     area_px = config.RESOLUCAO_M ** 2 / 1e6
-    print(f"[3/5] oceano mascarado: {int(mask_oceano.sum())} px | "
+    print(f"[3/5] agua_area mascarada: {int(agua_area.sum())} px | "
           f"terra: {n_terra} px ({n_terra * area_px:.1f} km²)")
+    print(f"[3/5] agua_margem (fica terra na área, conduz conexão): "
+          f"{int(agua_margem.sum())} px ({int(agua_margem.sum()) * area_px:.2f} km²)")
+
+    if agua_antiga_diagnostico is not None:
+        n_antiga = int(agua_antiga_diagnostico.sum())
+        n_area = int(agua_area.sum())
+        ganho_area = n_area - n_antiga
+        print(f"[3/5] agua_area: antiga={n_antiga} px | nova={n_area} px | "
+              f"ganho=+{ganho_area} px ({ganho_area * area_px:.2f} km²)")
+        if agua_conexao_diagnostico is not None:
+            n_conexao = int(agua_conexao_diagnostico.sum())
+            ganho_conexao = n_conexao - n_antiga
+            print(f"[3/5] agua_conexao: antiga={n_antiga} px | nova={n_conexao} px | "
+                  f"ganho=+{ganho_conexao} px ({ganho_conexao * area_px:.2f} km²)")
 
     # Se algum sentinela escapou, TODA a estatística de área fica errada.
     # Melhor falhar aqui do que publicar tabela com número inflado.
@@ -243,12 +420,13 @@ def mascarar_e_salvar(dem: np.ndarray, transform) -> np.ndarray:
             fonte="FABDEM V1-2 (Hawker et al. 2022, ERL 17:024016)",
             licenca="CC BY-NC-SA 4.0",
             datum_vertical="EGM2008",
-            oceano="pixels 0.0 exatos mascarados",
+            oceano="pixels de agua_area (deteccao na grade nativa) mascarados",
             gerado_em=datetime.now().isoformat(timespec="seconds"),
         )
     print(f"[3/5] MDE salvo: {config.MDE_PROCESSADO}")
 
-    _exportar_mascara_agua(mask_oceano, transform)
+    _exportar_mascara_agua(agua_area, transform)
+    _exportar_mascara_margem(agua_margem, transform)
 
     return dem
 
@@ -372,8 +550,29 @@ def main():
     config.criar_estrutura()
 
     dem, transform = mosaicar_e_recortar()
-    dem, transform = reprojetar(dem, transform)
-    dem = mascarar_e_salvar(dem, transform)
+
+    # Água detectada NA GRADE NATIVA, antes de qualquer reamostragem — ver
+    # "NOTA DE MÁSCARA DE ÁGUA" no topo do arquivo.
+    agua_nativa = detectar_agua_nativa(dem)
+    print(f"[2/5] água nativa (grade WGS84, pré-reprojeção): "
+          f"{int(agua_nativa.sum())} px")
+    dem_sem_agua = dem.copy()
+    dem_sem_agua[agua_nativa] = np.nan
+
+    dem_utm, transform_utm = reprojetar(dem_sem_agua, transform)
+    agua_area, agua_conexao, agua_margem = reprojetar_mascaras_agua(
+        agua_nativa, transform, transform_utm, dem_utm.shape)
+
+    # Diagnóstico: reproduz o método antigo (isclose pós-bilinear, com a água
+    # ainda em 0.0 no momento de reprojetar) só para o print de comparação —
+    # não entra em nenhum cálculo daqui em diante.
+    dem_utm_antigo, _ = _reprojetar_array(dem, transform, CONFIG_01["reamostragem"])
+    agua_antiga = np.isclose(dem_utm_antigo, CONFIG_01["valor_oceano"],
+                             atol=CONFIG_01["tol_oceano"], equal_nan=False)
+
+    dem = mascarar_e_salvar(dem_utm, agua_area, agua_margem, transform_utm,
+                            agua_antiga_diagnostico=agua_antiga,
+                            agua_conexao_diagnostico=agua_conexao)
     figura_mapa(dem)
     curva_e_tabela(dem)
 

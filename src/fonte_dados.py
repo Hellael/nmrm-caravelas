@@ -38,6 +38,11 @@ CONFIG_FONTE = {
     "arq_dem_web": "dem_30m_web.tif",
     "arq_agua_web": "mascara_agua_web.tif",
     "arq_limiar_web": "limiar_conexao_web.tif",
+    # v1.4 — segundo raster de limiar, gerado com canais MapBiomas (classe 33)
+    # como caminho hidráulico. Opcional: se faltar (dados_web antigo, gerado
+    # antes da v1.4, ou cobertura ausente no modo local do 03), a interface
+    # cai para o raster sem canais.
+    "arq_limiar_canais_web": "limiar_conexao_canais_web.tif",
     "arq_meta_web": "metadados_web.json",
     # v1.3 — cobertura do solo (MapBiomas Col. 11), produto do 04_prepara_cobertura.py.
     # Camada OPCIONAL: se faltar, a interface desliga o controle e segue.
@@ -111,6 +116,7 @@ def resolver_fonte(raiz_repo: str | Path = None) -> dict:
                 "dem": str(dem_local),
                 "agua": str(agua_local) if agua_local.exists() else None,
                 "limiar": None,
+                "limiar_canais": None,   # modo local sempre faz flood-fill em tempo real
                 "cobertura": str(cob_local) if cob_local.exists() else None,
                 "metadados": None,
                 "rotulo": "Dados completos (30 m, float32) — flood-fill em tempo real",
@@ -136,6 +142,7 @@ def resolver_fonte(raiz_repo: str | Path = None) -> dict:
 
     agua_web = dir_web / CONFIG_FONTE["arq_agua_web"]
     limiar_web = dir_web / CONFIG_FONTE["arq_limiar_web"]
+    limiar_canais_web = dir_web / CONFIG_FONTE["arq_limiar_canais_web"]
     meta_web = dir_web / CONFIG_FONTE["arq_meta_web"]
     cob_web = dir_web / CONFIG_FONTE["arq_cobertura_web"]
 
@@ -155,6 +162,7 @@ def resolver_fonte(raiz_repo: str | Path = None) -> dict:
         "dem": str(dem_web),
         "agua": str(agua_web) if agua_web.exists() else None,
         "limiar": str(limiar_web) if limiar_web.exists() else None,
+        "limiar_canais": str(limiar_canais_web) if limiar_canais_web.exists() else None,
         "cobertura": str(cob_web) if cob_web.exists() else None,
         "metadados": meta,
         "rotulo": rot,
@@ -287,7 +295,10 @@ def mascara_inundacao_auto(core,
                            semear_bordas: bool = True,
                            area_minima_ha: float = 0.0,
                            mascara_agua: np.ndarray = None,
-                           limiar: np.ndarray = None) -> dict:
+                           limiar: np.ndarray = None,
+                           usar_canais: bool = False,
+                           mascara_caminho: np.ndarray = None,
+                           limiar_canais: np.ndarray = None) -> dict:
     """
     Substitui `core.mascara_inundacao` escolhendo o caminho mais barato.
 
@@ -301,6 +312,19 @@ def mascara_inundacao_auto(core,
     ATENÇÃO: o raster de limiar foi gerado com um valor FIXO de
     `semear_bordas`. No modo limiar esse argumento é ignorado — a interface
     deve desabilitar o toggle correspondente.
+
+    `usar_canais` escolhe, no modo limiar, entre `limiar` (sem canais
+    MapBiomas) e `limiar_canais` (com canais MapBiomas como caminho
+    hidráulico — ver `core.CONFIG_INUNDACAO["caminhos_canais"]`). Se
+    `usar_canais=True` mas `limiar_canais` for None (raster ainda não
+    gerado), cai de volta para `limiar` sem canais.
+
+    No modo flood-fill (item 3), `mascara_caminho` é repassada tal como
+    recebida — SEM gating por `usar_canais` aqui dentro. Isso é proposital
+    desde a v1.4b: quem chama decide o que entra nessa máscara (margem
+    d'água real, sempre; canal MapBiomas, só se `usar_canais`) e já entrega
+    a união pronta. `usar_canais` continua controlando só a ESCOLHA do
+    raster de limiar no modo web.
     """
     dem = dados_dem["dem"]
     area_px = dados_dem["area_pixel_m2"]
@@ -314,9 +338,10 @@ def mascara_inundacao_auto(core,
         return _empacota(abaixo, np.zeros_like(abaixo), abaixo, area_px)
 
     # --- 2. Atalho pelo raster de limiar ------------------------------------
-    if limiar is not None:
+    limiar_ativo = limiar_canais if (usar_canais and limiar_canais is not None) else limiar
+    if limiar_ativo is not None:
         cota_cm = int(round(cota_m * CONFIG_FONTE["fator_escala_cm"]))
-        conectada = limiar <= cota_cm
+        conectada = limiar_ativo <= cota_cm
         inundada = abaixo & conectada
         isolada = abaixo & ~conectada
 
@@ -326,9 +351,10 @@ def mascara_inundacao_auto(core,
             inundada = core._remove_manchas_pequenas(inundada, estrutura, n_min)
             isolada = core._remove_manchas_pequenas(isolada, estrutura, n_min)
 
-        print(f"[MASCARA] modo=limiar pré-computado | cota={cota_m:.2f} m "
-              f"({cota_cm} cm) | inundada={int(inundada.sum())} px | "
-              f"isolada={int(isolada.sum())} px")
+        _rot_limiar = "com canais" if limiar_ativo is limiar_canais else "sem canais"
+        print(f"[MASCARA] modo=limiar pré-computado ({_rot_limiar}) | "
+              f"cota={cota_m:.2f} m ({cota_cm} cm) | "
+              f"inundada={int(inundada.sum())} px | isolada={int(isolada.sum())} px")
         return _empacota(inundada, isolada, abaixo, area_px)
 
     # --- 3. Flood-fill em tempo real ----------------------------------------
@@ -339,6 +365,7 @@ def mascara_inundacao_auto(core,
         area_pixel_m2=area_px,
         area_minima_ha=area_minima_ha,
         mascara_agua=mascara_agua,
+        mascara_caminho=mascara_caminho,
     )
 
 
@@ -357,9 +384,14 @@ def _empacota(inundada, isolada, abaixo, area_pixel_m2):
 
 def validar_limiar(core, dados_dem: dict, mascara_agua: np.ndarray,
                    limiar: np.ndarray, cotas=(0.5, 1.0, 2.0, 3.0),
-                   semear_bordas: bool = True) -> None:
+                   semear_bordas: bool = True,
+                   limiar_canais: np.ndarray = None,
+                   mascara_caminho: np.ndarray = None) -> None:
     """
-    Compara o resultado do raster de limiar com o flood-fill em tempo real.
+    Compara o resultado do(s) raster(s) de limiar com o flood-fill em tempo
+    real. Roda a checagem sem canais e, se `limiar_canais` for passado
+    (junto com `mascara_caminho`), roda de novo com canais — os dois
+    precisam bater com seu flood-fill equivalente.
 
     Rode UMA VEZ em modo local, com os dados leves carregados, para
     confirmar que os dois caminhos dão o mesmo número. Se divergirem,
@@ -367,19 +399,28 @@ def validar_limiar(core, dados_dem: dict, mascara_agua: np.ndarray,
     conectividade (4 x 8) entre 03_prepara_dem_web.py e CONFIG_INUNDACAO.
     """
     a = dados_dem["area_pixel_m2"] / 1e6
-    # "dif" em vez de Δ: esta função é de diagnóstico e roda em console
-    # Windows, que não codifica o glifo grego em cp1252.
-    print("\n  Cota (m) | Flood-fill (km²) | Limiar (km²) | dif (km²)")
-    print("  " + "-" * 52)
-    for cota in cotas:
-        ref = core.mascara_inundacao(
-            dados_dem["dem"], dados_dem["mask_oceano"], cota,
-            conectividade=True, semear_bordas=semear_bordas,
-            area_pixel_m2=dados_dem["area_pixel_m2"], mascara_agua=mascara_agua)
-        alt = mascara_inundacao_auto(core, dados_dem, cota, limiar=limiar)
-        v_ref = float(ref["inundada"].sum()) * a
-        v_alt = float(alt["inundada"].sum()) * a
-        flag = "" if abs(v_ref - v_alt) < 0.05 else "   <-- DIVERGE"
-        print(f"  {cota:8.2f} | {v_ref:16.2f} | {v_alt:12.2f} | "
-              f"{v_alt - v_ref:+7.2f}{flag}")
-    print()
+
+    def _rodar(rotulo, limiar_ref, usar_canais, mascara_cam):
+        # "dif" em vez de Δ: esta função é de diagnóstico e roda em console
+        # Windows, que não codifica o glifo grego em cp1252.
+        print(f"\n  [{rotulo}] Cota (m) | Flood-fill (km²) | Limiar (km²) | dif (km²)")
+        print("  " + "-" * 52)
+        for cota in cotas:
+            ref = core.mascara_inundacao(
+                dados_dem["dem"], dados_dem["mask_oceano"], cota,
+                conectividade=True, semear_bordas=semear_bordas,
+                area_pixel_m2=dados_dem["area_pixel_m2"], mascara_agua=mascara_agua,
+                mascara_caminho=mascara_cam)
+            alt = mascara_inundacao_auto(
+                core, dados_dem, cota, limiar=limiar_ref if not usar_canais else None,
+                usar_canais=usar_canais, limiar_canais=limiar_ref if usar_canais else None)
+            v_ref = float(ref["inundada"].sum()) * a
+            v_alt = float(alt["inundada"].sum()) * a
+            flag = "" if abs(v_ref - v_alt) < 0.05 else "   <-- DIVERGE"
+            print(f"  {cota:8.2f} | {v_ref:16.2f} | {v_alt:12.2f} | "
+                  f"{v_alt - v_ref:+7.2f}{flag}")
+        print()
+
+    _rodar("sem canais", limiar, False, None)
+    if limiar_canais is not None:
+        _rodar("com canais", limiar_canais, True, mascara_caminho)

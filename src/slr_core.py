@@ -152,6 +152,27 @@ CONFIG_INUNDACAO = {
     "semear_bordas":   True,   # bordas do domínio também injetam água (evita falso confinamento)
     "conexao_8":       True,   # vizinhança 8 (diagonal) em vez de 4
     "area_minima_ha":  0.0,    # descarta manchas menores que isto (0 = não descarta)
+
+    # -------------------------------------------------------------------------
+    # Canais MapBiomas como caminho hidráulico (v1.4).
+    #
+    # CONCEITO: um pixel de canal (classe 33 — "Rio, Lago e Oceano" — fora da
+    # máscara de água) é CAMINHO, não FONTE. Ele deixa a água atravessar (entra
+    # no conjunto `candidato` do flood-fill), mas não injeta água sozinho (não
+    # entra em `fonte`). A distinção importa porque a classe 33 também cobre
+    # lagoas interiores sem ligação com o mar — se virassem fonte, cada uma
+    # criaria uma conexão falsa com qualquer depressão vizinha.
+    #
+    # SALVAGUARDA: só conta como caminho o pixel de canal com cota FABDEM
+    # <= caminho_cota_max_m. Sem isso, um rio ou lago no alto do tabuleiro
+    # Barreiras poderia religar uma depressão baixa muito distante através de
+    # uma classe 33 que não tem nada a ver com o estuário. 6,0 m é o teto dos
+    # terraços holocênicos de Andrade et al. (2003) — o mesmo já usado em
+    # `config.FAIXAS_ALTIMETRICAS`. Pixel de canal com cota NaN não é caminho.
+    # -------------------------------------------------------------------------
+    "caminhos_canais":     True,
+    "classes_caminho":     [33],   # MapBiomas Col. 11: "Rio, Lago e Oceano"
+    "caminho_cota_max_m":  6.0,
 }
 
 # -----------------------------------------------------------------------------
@@ -311,6 +332,27 @@ def carregar_mascara_agua(caminho: str) -> np.ndarray | None:
     return mascara
 
 
+def carregar_mascara_margem(caminho: str) -> np.ndarray | None:
+    """
+    Lê a máscara de MARGEM d'água exportada por `01_mapa_elevacao.py`
+    (v1.4b): `agua_conexao & ~agua_area` — pixel que fica como TERRA na área
+    (o MDE preserva a cota real) mas tem água real suficiente para conduzir a
+    conexão hidráulica. Soma-se ao caminho por canal MapBiomas em
+    `mascara_caminho()`/`mascara_inundacao()`, com as mesmas regras (conduz,
+    nunca é fonte) — mas SEM a salvaguarda de cota do canal, porque aqui é
+    água real medida no próprio FABDEM, não uma classe de cobertura que pode
+    estar longe do mar.
+
+    Retorna None se o arquivo não existir (camada opcional).
+    """
+    if not os.path.exists(caminho):
+        return None
+    with rasterio.open(caminho) as src:
+        mascara = src.read(1).astype(bool)
+    _print(f"[MASCARA_MARGEM] {os.path.basename(caminho)} | {int(mascara.sum())} px de margem")
+    return mascara
+
+
 # =============================================================================
 # 3. COMPOSIÇÃO DA COTA DE INUNDAÇÃO
 # =============================================================================
@@ -344,6 +386,46 @@ def cota_limiar(nmrm_m: float,
 # 4. MÁSCARA DE INUNDAÇÃO (bathtub simples vs. hidrologicamente conectada)
 # =============================================================================
 
+def mascara_caminho(dem: np.ndarray,
+                    mascara_agua: np.ndarray,
+                    cobertura: np.ndarray = None,
+                    classes: list = None,
+                    cota_max_m: float = None) -> np.ndarray | None:
+    """
+    Pixels de canal do MapBiomas (fora da máscara de água) que servem de
+    CAMINHO hidráulico — ver o conceito completo em
+    `CONFIG_INUNDACAO["caminhos_canais"]`: caminho ≠ fonte, e só conta até
+    `caminho_cota_max_m` (salvaguarda contra religar depressões distantes
+    através de um lago/rio no alto do tabuleiro Barreiras).
+
+    `cobertura` precisa estar na MESMA grade do `dem` (mesmo shape) — nunca
+    reamostrada aqui em silêncio. Devolve None se `cobertura` for None (a
+    camada é opcional; a simulação segue sem canais).
+    """
+    if cobertura is None:
+        _print("[CAMINHO] cobertura ausente — conectividade sem canais")
+        return None
+
+    if cobertura.shape != dem.shape:
+        raise ValueError(
+            f"Cobertura {cobertura.shape} não tem o mesmo shape do MDE {dem.shape}. "
+            "Rode 04_prepara_cobertura.py para gerar o recorte alinhado à grade "
+            "do MDE — cobertura nunca deve ser reamostrada em silêncio aqui."
+        )
+
+    cfg = CONFIG_INUNDACAO
+    classes = cfg["classes_caminho"] if classes is None else classes
+    cota_max_m = cfg["caminho_cota_max_m"] if cota_max_m is None else cota_max_m
+
+    caminho = (np.isin(cobertura, classes)
+              & ~mascara_agua.astype(bool)
+              & np.isfinite(dem)
+              & (dem <= cota_max_m))
+    _print(f"[CAMINHO] classes={classes} | cota_max={cota_max_m:.1f} m | "
+          f"{int(caminho.sum())} px de caminho")
+    return caminho
+
+
 def mascara_inundacao(dem: np.ndarray,
                       mask_oceano: np.ndarray,
                       cota_m: float,
@@ -352,7 +434,8 @@ def mascara_inundacao(dem: np.ndarray,
                       conexao_8: bool = None,
                       area_pixel_m2: float = None,
                       area_minima_ha: float = None,
-                      mascara_agua: np.ndarray = None) -> dict:
+                      mascara_agua: np.ndarray = None,
+                      mascara_caminho: np.ndarray = None) -> dict:
     """
     Separa o terreno abaixo da cota em duas classes fisicamente distintas:
 
@@ -374,12 +457,19 @@ def mascara_inundacao(dem: np.ndarray,
     água nenhuma depois que `01_mapa_elevacao.py` grava esses pixels como
     nodata — indistinguível de "fora do bbox, sem tile". Se `mascara_agua`
     não for passada, cai no método antigo com `mask_oceano` (aviso impresso).
+
+    `mascara_caminho`: máscara de canais MapBiomas (ver `mascara_caminho()` /
+    `CONFIG_INUNDACAO["caminhos_canais"]`). Entra em `candidato` — a água
+    atravessa por ela — mas NUNCA em `fonte`: um canal conduz, não injeta
+    água sozinho. Se `caminhos_canais` estiver desligado ou esta máscara for
+    None, o resultado é IDÊNTICO ao comportamento anterior à v1.4.
     """
     cfg = CONFIG_INUNDACAO
     conectividade = cfg["conectividade"] if conectividade is None else conectividade
     semear_bordas = cfg["semear_bordas"] if semear_bordas is None else semear_bordas
     conexao_8 = cfg["conexao_8"] if conexao_8 is None else conexao_8
     area_minima_ha = cfg["area_minima_ha"] if area_minima_ha is None else area_minima_ha
+    usar_canais = bool(cfg["caminhos_canais"]) and (mascara_caminho is not None)
 
     valido = np.isfinite(dem)
     abaixo = valido & (dem <= cota_m)
@@ -408,6 +498,14 @@ def mascara_inundacao(dem: np.ndarray,
     # externa. Sem isso, dois pedaços de terra em lados opostos de um canal
     # nunca caem no mesmo componente conexo, mesmo ambos estando molhados.
     candidato = abaixo | agua
+
+    # Canal MapBiomas: entra em `candidato` (conduz), nunca em `fonte`
+    # (não injeta água sozinho) — ver docstring e CONFIG_INUNDACAO.
+    n_px_caminho = 0
+    if usar_canais:
+        caminho = mascara_caminho.astype(bool)
+        candidato = candidato | caminho
+        n_px_caminho = int(caminho.sum())
 
     # Água pode entrar pela água real e, opcionalmente, pelas bordas do recorte
     fonte = agua.copy()
@@ -443,9 +541,11 @@ def mascara_inundacao(dem: np.ndarray,
         inundada = _remove_manchas_pequenas(inundada, estrutura, n_min)
         isolada = _remove_manchas_pequenas(isolada, estrutura, n_min)
 
+    _txt_canais = f"canais=sim ({n_px_caminho} px de caminho)" if usar_canais else "canais=nao"
     _print(f"[MASCARA] modo=conectado ({'mascara_agua' if usa_mascara_agua else 'mask_oceano (fallback)'}) "
-          f"| cota={cota_m:.2f} m | manchas={n_rot} | conectadas={len(rot_conectados)} | "
-          f"inundada={int(inundada.sum())} px | isolada={int(isolada.sum())} px")
+          f"| {_txt_canais} | cota={cota_m:.2f} m | manchas={n_rot} | "
+          f"conectadas={len(rot_conectados)} | inundada={int(inundada.sum())} px | "
+          f"isolada={int(isolada.sum())} px")
 
     return _empacota_mascaras(inundada, isolada, abaixo, area_pixel_m2)
 
@@ -505,7 +605,8 @@ def tabela_cenarios(dados_dem: dict,
                     percentis: list = ("mediana", "p83"),
                     mare_m: float = 0.0,
                     conectividade: bool = True,
-                    mascara_agua: np.ndarray = None) -> pd.DataFrame:
+                    mascara_agua: np.ndarray = None,
+                    mascara_caminho: np.ndarray = None) -> pd.DataFrame:
     """
     Roda a simulação para a matriz cenário × horizonte × percentil e
     devolve a tabela pronta para o relatório.
@@ -523,6 +624,7 @@ def tabela_cenarios(dados_dem: dict,
                     conectividade=conectividade,
                     area_pixel_m2=dados_dem["area_pixel_m2"],
                     mascara_agua=mascara_agua,
+                    mascara_caminho=mascara_caminho,
                 )
                 e = estatisticas_area(m, dados_dem["dem"], dados_dem["area_pixel_m2"])
                 linhas.append({
@@ -539,7 +641,8 @@ def tabela_cenarios(dados_dem: dict,
         m = mascara_inundacao(dados_dem["dem"], dados_dem["mask_oceano"], c["cota_m"],
                               conectividade=conectividade,
                               area_pixel_m2=dados_dem["area_pixel_m2"],
-                              mascara_agua=mascara_agua)
+                              mascara_agua=mascara_agua,
+                              mascara_caminho=mascara_caminho)
         e = estatisticas_area(m, dados_dem["dem"], dados_dem["area_pixel_m2"])
         linhas.append({
             "Cenário": "Sensibilidade (turma)", "Horizonte": "—", "Percentil": "—",
@@ -556,7 +659,8 @@ def curva_exposicao(dados_dem: dict,
                     cotas: np.ndarray = None,
                     mare_m: float = 0.0,
                     conectividade: bool = True,
-                    mascara_agua: np.ndarray = None) -> pd.DataFrame:
+                    mascara_agua: np.ndarray = None,
+                    mascara_caminho: np.ndarray = None) -> pd.DataFrame:
     """
     Curva contínua área inundada × NMRM — a "curva hipsométrica efetiva".
     É o gráfico que transforma três mapas soltos em uma leitura de sensibilidade.
@@ -568,7 +672,8 @@ def curva_exposicao(dados_dem: dict,
         m = mascara_inundacao(dados_dem["dem"], dados_dem["mask_oceano"], c["cota_m"],
                               conectividade=conectividade,
                               area_pixel_m2=dados_dem["area_pixel_m2"],
-                              mascara_agua=mascara_agua)
+                              mascara_agua=mascara_agua,
+                              mascara_caminho=mascara_caminho)
         e = estatisticas_area(m, dados_dem["dem"], dados_dem["area_pixel_m2"])
         reg.append({"NMRM (m)": round(float(nmrm), 2),
                     "Cota (m)": round(c["cota_m"], 2),
