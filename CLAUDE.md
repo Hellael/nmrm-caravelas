@@ -207,6 +207,7 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
   na v1.3, opcionais para a leitura principal do mapa — o usuário liga quando
   quiser. O usuário continua podendo ativá-las manualmente; a lógica de
   renderização e os dados não mudaram.
+- **Máscara de água classificada na grade nativa, ANTES da reprojeção (22/09/2026).** `01_mapa_elevacao.py`: `classificar_agua()` testa `dem==0.0` no mosaico bruto (WGS84, ~30 m) e `reprojetar()` leva essa máscara para a grade UTM com `nearest` — separado da elevação, que continua reprojetada com `bilinear`. Corrige a causa raiz de rios/canais estreitos não entrarem na grade de conectividade: testar `dem==0.0` DEPOIS do bilinear (como antes) borra o 0,0 exato em qualquer canal mais estreito que a vizinhança do reamostrador. Efeito colateral relevante, não um bug: pixels de rio que antes vazavam para "terra de baixa cota" (e inflavam bathtub/conectado) agora são excluídos corretamente como água preexistente — os valores de referência antigos (4,33 / 7,00 / 27,84 km² em +0,5 / +1,0 / +2,0 m) caem para 0,64 / 1,28 / 19,07 km² e ficam OBSOLETOS; recalculados em `dados_web/metadados_web.json` (rodado com os tiles reais em 22/09). **Atualizar** `docs/logica_da_ferramenta.md`, README e qualquer relatório que cite os números antigos. `diagnostico_zeros.py` e `histograma_cauda_costeira.py` foram ajustados para a nova assinatura de `reprojetar()`.
 
 ## 6. Estado atual
 

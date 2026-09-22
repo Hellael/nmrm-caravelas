@@ -32,7 +32,29 @@ NOTA DE DATUM
     quantificado (ver docs/diagnostico_zeros.md): apenas 1,00 km² (289
     manchas isoladas) dos 2.125,4 km² mascarados não tem conexão hidráulica
     com o oceano aberto. Limitação real, porém marginal (~0,05%), não uma
-    incógnita.
+    incógnita. NÚMERO A REVALIDAR: foi calculado antes da mudança de ordem
+    de operações descrita abaixo — a máscara agora captura mais água (rios
+    estreitos), então a pegada mascarada cresce.
+
+NOTA DE ORDEM DE OPERAÇÕES — rios estreitos (set/2026)
+    A classificação "isto é água" roda ANTES da reprojeção, na grade nativa
+    do FABDEM — não depois, como em versões anteriores. Reprojetar a
+    elevação com bilinear e só então testar dem==0.0 apagava o 0.0 exato de
+    qualquer canal mais estreito que a vizinhança do reamostrador: um rio de
+    1 pixel de largura quase nunca sobrevive ao blend bilinear, porque ele
+    mistura o valor do pixel de água com o dos vizinhos de terra. Isso fazia
+    a grade de conectividade hidráulica não reconhecer rios/canais estreitos
+    como água, mesmo quando o FABDEM os via como tal.
+
+    Agora: `classificar_agua()` testa dem==0.0 no mosaico bruto (grade
+    nativa, antes de reprojetar); `reprojetar()` leva essa máscara para a
+    grade UTM com reamostragem `nearest` (categórica — preserva bordas, não
+    borra), enquanto a elevação continua reprojetada com `bilinear`
+    (contínua). Mesmo princípio já usado para a camada hipsométrica em
+    `src/mapa_web.py`: classificar antes de reprojetar, para poder usar
+    `nearest`. Limite real que continua existindo: canal mais estreito que
+    ~30 m (a resolução nativa do FABDEM) nunca vira pixel de água — isso é
+    limite do dado bruto, não desta pipeline.
 
 Autor: Helio | Assistência: Claude
 """
@@ -58,15 +80,16 @@ from src.slr_core import CONFIG_MAPA, hillshade
 # =============================================================================
 
 CONFIG_01 = {
-    "reamostragem":     Resampling.bilinear,
-    "valor_oceano":     0.0,
-    "tol_oceano":       1e-6,
-    "nodata_saida":     -9999.0,
-    "compressao":       "lzw",
-    "percentil_teto":   99.5,   # corta outliers na escala de cor do mapa
-    "z_min_plausivel":  -50.0,  # abaixo disto é sentinela de nodata, não terreno
-    "z_max_plausivel":  9000.0,
-    "dpi":              300,
+    "reamostragem":          Resampling.bilinear,  # MDE: elevação é contínua
+    "reamostragem_mascara":  Resampling.nearest,    # água: classificação categórica
+    "valor_oceano":          0.0,
+    "tol_oceano":            1e-6,
+    "nodata_saida":          -9999.0,
+    "compressao":            "lzw",
+    "percentil_teto":        99.5,   # corta outliers na escala de cor do mapa
+    "z_min_plausivel":       -50.0,  # abaixo disto é sentinela de nodata, não terreno
+    "z_max_plausivel":       9000.0,
+    "dpi":                   300,
 }
 
 
@@ -146,11 +169,49 @@ def mosaicar_e_recortar() -> tuple:
 
 
 # =============================================================================
-# 2. REPROJEÇÃO PARA UTM 24S
+# 2. CLASSIFICAÇÃO DE ÁGUA (grade nativa, ANTES da reprojeção)
 # =============================================================================
 
-def reprojetar(dem: np.ndarray, transform) -> tuple:
-    """Reprojeta para EPSG:31984 na resolução alvo. Retorna (array, transform)."""
+def classificar_agua(dem: np.ndarray) -> np.ndarray:
+    """
+    Marca como água (True) os pixels com elevação 0.0 exata — convenção do
+    próprio FABDEM para oceano/estuário/corpo d'água.
+
+    Roda na grade NATIVA do FABDEM (WGS84, ~30 m), antes de qualquer
+    reprojeção. Fazer esse teste depois da reprojeção bilinear (como nas
+    versões anteriores) borra o 0.0 exato em qualquer canal mais estreito
+    que a vizinhança do reamostrador — um rio de 1 pixel de largura quase
+    nunca sobrevive ao blend. `reprojetar()` leva esta máscara para a grade
+    UTM com `nearest`, preservando os canais que sobreviverem aqui.
+
+    Limite real: canal mais estreito que a resolução nativa do FABDEM
+    (~30 m) nunca chega a virar pixel de água — isso é limite do dado
+    bruto, não desta função.
+    """
+    mask = np.isclose(dem, CONFIG_01["valor_oceano"], atol=CONFIG_01["tol_oceano"],
+                      equal_nan=False)
+    print(f"[1/5] água classificada na grade nativa ({config.CRS_FONTE}): "
+          f"{int(mask.sum())} px")
+    return mask
+
+
+# =============================================================================
+# 3. REPROJEÇÃO PARA UTM 24S (MDE bilinear + máscara nearest)
+# =============================================================================
+
+def reprojetar(dem: np.ndarray, mask_agua: np.ndarray, transform) -> tuple:
+    """
+    Reprojeta para EPSG:31984 na resolução alvo. Retorna
+    (dem_reprojetado, mask_agua_reprojetada, transform_alvo).
+
+    O MDE usa `CONFIG_01["reamostragem"]` (bilinear — elevação é contínua).
+    A máscara de água usa `CONFIG_01["reamostragem_mascara"]` (nearest —
+    é uma classificação categórica; misturá-la com os vizinhos como se
+    fosse elevação contínua é o que apagava os canais estreitos nas
+    versões anteriores, que só testavam dem==0.0 depois do bilinear). As
+    duas saem na MESMA grade de destino, então continuam alinhadas pixel a
+    pixel.
+    """
     altura, largura = dem.shape
     bbox = config.BBOX_WGS84
 
@@ -161,22 +222,34 @@ def reprojetar(dem: np.ndarray, transform) -> tuple:
         resolution=config.RESOLUCAO_M,
     )
 
-    destino = np.full((alt_alvo, larg_alvo), np.nan, dtype="float32")
+    dem_alvo = np.full((alt_alvo, larg_alvo), np.nan, dtype="float32")
     reproject(
-        source=dem, destination=destino,
+        source=dem, destination=dem_alvo,
         src_transform=transform, src_crs=config.CRS_FONTE,
         dst_transform=transform_alvo, dst_crs=config.CRS_ALVO,
         src_nodata=np.nan, dst_nodata=np.nan,
         resampling=CONFIG_01["reamostragem"],
     )
 
+    mask_alvo_u8 = np.zeros((alt_alvo, larg_alvo), dtype="uint8")
+    reproject(
+        source=mask_agua.astype("uint8"), destination=mask_alvo_u8,
+        src_transform=transform, src_crs=config.CRS_FONTE,
+        dst_transform=transform_alvo, dst_crs=config.CRS_ALVO,
+        resampling=CONFIG_01["reamostragem_mascara"],
+    )
+    mask_alvo = mask_alvo_u8.astype(bool)
+
     print(f"[2/5] reprojetado para {config.CRS_ALVO}: "
-          f"{alt_alvo}x{larg_alvo} px @ {config.RESOLUCAO_M:.0f} m")
-    return destino, transform_alvo
+          f"{alt_alvo}x{larg_alvo} px @ {config.RESOLUCAO_M:.0f} m "
+          f"(MDE=bilinear, água=nearest)")
+    print(f"[2/5] água após reprojeção: {int(mask_alvo.sum())} px "
+          f"(antes, grade nativa: {int(mask_agua.sum())} px)")
+    return dem_alvo, mask_alvo, transform_alvo
 
 
 # =============================================================================
-# 3. MÁSCARA DE OCEANO E GRAVAÇÃO
+# 4. APLICAÇÃO DA MÁSCARA E GRAVAÇÃO
 # =============================================================================
 
 def _exportar_mascara_agua(mask_oceano: np.ndarray, transform) -> None:
@@ -187,7 +260,9 @@ def _exportar_mascara_agua(mask_oceano: np.ndarray, transform) -> None:
     escrita, em nodata (-9999) — igual ao sentinela usado para "fora do
     bbox, sem tile". O MDE_PROCESSADO sozinho não permite mais distinguir
     as duas coisas; esta máscara preserva a identidade "isto era água"
-    capturada aqui, antes desse round-trip apagar o valor 0.0 exato.
+    classificada na grade nativa (`classificar_agua`) e levada para cá por
+    `nearest` (`reprojetar`) — antes desse round-trip apagar o valor 0.0
+    exato.
     """
     perfil = {
         "driver": "GTiff", "height": mask_oceano.shape[0], "width": mask_oceano.shape[1],
@@ -198,23 +273,26 @@ def _exportar_mascara_agua(mask_oceano: np.ndarray, transform) -> None:
     with rasterio.open(config.MASCARA_AGUA, "w", **perfil) as dst:
         dst.write(mask_oceano.astype("uint8"), 1)
         dst.update_tags(
-            descricao="1=agua (oceano/estuario/corpo d'agua, dem==0.0 exato no FABDEM), 0=terra",
+            descricao=("1=agua (oceano/estuario/corpo d'agua; dem==0.0 exato no "
+                       "FABDEM, classificado na grade nativa ANTES da reprojecao "
+                       "e levado por nearest), 0=terra"),
             gerado_em=datetime.now().isoformat(timespec="seconds"),
         )
     print(f"[3/5] máscara de água salva: {config.MASCARA_AGUA} "
           f"({int(mask_oceano.sum())} px de água)")
 
 
-def mascarar_e_salvar(dem: np.ndarray, transform) -> np.ndarray:
-    """Marca oceano (0.0 exato) como NaN e grava o GeoTIFF processado."""
-    mask_oceano = np.isclose(dem, CONFIG_01["valor_oceano"],
-                             atol=CONFIG_01["tol_oceano"], equal_nan=False)
+def mascarar_e_salvar(dem: np.ndarray, mask_oceano: np.ndarray, transform) -> np.ndarray:
+    """
+    Aplica a máscara de água (já classificada na grade nativa e reprojetada
+    por `reprojetar` com `nearest`) como NaN e grava o GeoTIFF processado.
+    """
     dem = dem.copy()
     dem[mask_oceano] = np.nan
 
     n_terra = int(np.isfinite(dem).sum())
     area_px = config.RESOLUCAO_M ** 2 / 1e6
-    print(f"[3/5] oceano mascarado: {int(mask_oceano.sum())} px | "
+    print(f"[3/5] água mascarada: {int(mask_oceano.sum())} px | "
           f"terra: {n_terra} px ({n_terra * area_px:.1f} km²)")
 
     # Se algum sentinela escapou, TODA a estatística de área fica errada.
@@ -243,7 +321,7 @@ def mascarar_e_salvar(dem: np.ndarray, transform) -> np.ndarray:
             fonte="FABDEM V1-2 (Hawker et al. 2022, ERL 17:024016)",
             licenca="CC BY-NC-SA 4.0",
             datum_vertical="EGM2008",
-            oceano="pixels 0.0 exatos mascarados",
+            oceano="pixels 0.0 exatos mascarados (classificados na grade nativa)",
             gerado_em=datetime.now().isoformat(timespec="seconds"),
         )
     print(f"[3/5] MDE salvo: {config.MDE_PROCESSADO}")
@@ -254,7 +332,7 @@ def mascarar_e_salvar(dem: np.ndarray, transform) -> np.ndarray:
 
 
 # =============================================================================
-# 4. MAPA HIPSOMÉTRICO
+# 5. MAPA HIPSOMÉTRICO
 # =============================================================================
 
 def figura_mapa(dem: np.ndarray) -> str:
@@ -305,7 +383,7 @@ def figura_mapa(dem: np.ndarray) -> str:
 
 
 # =============================================================================
-# 5. CURVA HIPSOMÉTRICA E TABELA
+# 6. CURVA HIPSOMÉTRICA E TABELA
 # =============================================================================
 
 def curva_e_tabela(dem: np.ndarray) -> str:
@@ -372,8 +450,9 @@ def main():
     config.criar_estrutura()
 
     dem, transform = mosaicar_e_recortar()
-    dem, transform = reprojetar(dem, transform)
-    dem = mascarar_e_salvar(dem, transform)
+    mask_agua = classificar_agua(dem)
+    dem, mask_agua, transform = reprojetar(dem, mask_agua, transform)
+    dem = mascarar_e_salvar(dem, mask_agua, transform)
     figura_mapa(dem)
     curva_e_tabela(dem)
 

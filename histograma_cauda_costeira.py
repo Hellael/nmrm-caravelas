@@ -126,7 +126,8 @@ def main():
 
     pipeline_01 = _carregar_funcoes_01()
     dem, transform = pipeline_01.mosaicar_e_recortar()
-    dem, transform = pipeline_01.reprojetar(dem, transform)
+    dem, _mask_agua, transform = pipeline_01.reprojetar(
+        dem, pipeline_01.classificar_agua(dem), transform)
     area_pixel_m2 = config.RESOLUCAO_M ** 2
 
     print("-" * 72)
