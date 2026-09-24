@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+import textwrap
 from datetime import datetime
 
 import numpy as np
@@ -24,7 +25,7 @@ import pandas as pd
 import rasterio
 import matplotlib
 from matplotlib import cm, colors
-from matplotlib.colors import LightSource
+from matplotlib.colors import LightSource, to_rgb
 from matplotlib.lines import Line2D
 from matplotlib.path import Path as _MplPath
 from matplotlib.patches import PathPatch
@@ -239,6 +240,33 @@ CONFIG_MAPA = {
     "cor_oceano":       "#0B3D5C",
     "alpha_agua":       0.62,
     "dpi_export":       300,
+    # Recorte do modo Turma, na figura: opacidade do terreno FORA do polígono.
+    # 0.0 = recorte duro, o de fora simplesmente não é desenhado — é o
+    # comportamento pedido (24/09/2026): no modo Turma a figura mostra só o
+    # que está dentro da área de estudo. Um valor entre 0 e 1 traz o terreno
+    # de volta como fantasma, e aí o item "Terreno fora da área da turma"
+    # reaparece sozinho na legenda. Margem em fração do bbox do recorte.
+    "alpha_fora_recorte":   0.0,
+    # Cinza de referência do terreno de fora — usado SÓ para montar a amostra
+    # da legenda quando `alpha_fora_recorte` > 0 (o mapa em si esmaece o
+    # próprio hillshade). Mexer aqui não muda o mapa, só a legenda.
+    "cor_cinza_fora":       "#BFBFBF",
+    "margem_enquadramento": 0.02,
+    # Teto de proporção largura/altura da figura quando o quadro é
+    # reproporcionado ao recorte. 2.4 ainda cabe numa página de relatório.
+    "aspecto_max":          2.4,
+    # Barra de escala: fração da largura do mapa que ela deve ocupar, antes de
+    # ser arredondada para a série 1-2-5.
+    "fracao_barra_escala":  0.16,
+    # Quanto os créditos descem (fração da altura do eixo) quando a legenda
+    # sai do mapa e ocupa a faixa logo abaixo dele.
+    "desloca_creditos_legenda": 0.11,
+    # Extensão do limite da turma (o shapefile do QGIS), aferição esférica
+    # impressa por `09_limite_turma.py`. Espelhada aqui porque o motor não
+    # importa `config` nem lê GeoJSON — serve só para o rodapé dizer que os km²
+    # contados NÃO são a extensão do polígono, e sim a parte dele que tem MDE.
+    # Quem trocar o shapefile atualiza este número.
+    "limite_turma_km2":     16255.0,
 }
 
 # -----------------------------------------------------------------------------
@@ -249,11 +277,6 @@ CONFIG_MAPA = {
 # de interface (regra 5 do projeto). Vetorial e externo ao projeto: nenhuma
 # destas três camadas é gerada aqui, só desenhada.
 CONFIG_CAMADAS_FIG = {
-    "area_turma": {
-        "cor_borda": "#2C7DA0",   # só contorno — ver nota em figura_mapa
-        "espessura": 1.6,
-        "zorder":    4,
-    },
     "isobatas": {
         "cores_por_profundidade_m": {
             20:  "#BEE3F8",
@@ -273,6 +296,17 @@ CONFIG_CAMADAS_FIG = {
         "alpha_preenchimento": 0.18,
         "espessura_borda":     1.3,
         "zorder":              6,
+    },
+    # Contorno externo da união (`09_limite_turma.py`) — desenhado POR ÚLTIMO,
+    # por cima de tudo, só a borda.
+    "limite": {
+        # Mesma cor do mapa interativo (`mapa_web.CONFIG_CAMADAS_TURMA`) e do
+        # estilo .qlr do QGIS: o limite que define o recorte tem que ser a
+        # mesma linha na tela, no relatório e no projeto do QGIS. Desenhado
+        # POR ÚLTIMO, por cima de tudo, só a borda.
+        "cor_borda": "#232323",
+        "espessura": 2.6,
+        "zorder":    7,
     },
 }
 
@@ -545,13 +579,58 @@ def _empacota_mascaras(inundada, isolada, abaixo, area_pixel_m2):
 # 5. ESTATÍSTICAS E TABELAS
 # =============================================================================
 
-def estatisticas_area(mascaras: dict, dem: np.ndarray, area_pixel_m2: float) -> dict:
-    """Converte contagem de pixels em km² e percentuais da área emersa atual."""
+def mascara_recorte(geojson: dict, dados_dem: dict) -> np.ndarray:
+    """
+    Rasteriza o limite da turma (`limite_turma.geojson`, EPSG:4674) na grade
+    do MDE. Devolve bool na forma de `dados_dem["dem"]`: True = dentro.
+
+    RECORTE É DE RELATO, NÃO DE CÁLCULO. A conectividade hidráulica é sempre
+    resolvida no domínio INTEIRO do MDE (no modo web, `limiar_conexao_web.tif`
+    já vem pré-computado assim); esta máscara só entra DEPOIS, para contar
+    área e desenhar. Recortar o MDE antes do flood-fill cortaria caminhos de
+    água que entram pela borda e inventaria pixels "isolados" que não são.
+    Não inverta essa ordem numa refatoração.
+
+    Só rasterio (já dependência do app) — nada de shapely no runtime.
+    """
+    from rasterio.features import geometry_mask
+    from rasterio.warp import transform_geom
+
+    dem = dados_dem["dem"]
+    geoms = [transform_geom("EPSG:4674", dados_dem["crs"], f["geometry"])
+             for f in geojson.get("features", [])]
+    dentro = geometry_mask(geoms, out_shape=dem.shape,
+                           transform=dados_dem["transform"], invert=True)
+
+    a = dados_dem["area_pixel_m2"] / 1e6
+    terra = np.isfinite(dem)
+    terra_dentro = float((terra & dentro).sum()) * a
+    terra_total = float(terra.sum()) * a
+    pct = 100.0 * terra_dentro / terra_total if terra_total else float("nan")
+    _print(f"[RECORTE] dentro={int(dentro.sum())} px | terra dentro={terra_dentro:.1f} km² "
+           f"({pct:.1f}% da terra do domínio, {terra_total:.1f} km²)")
+    return dentro
+
+
+def estatisticas_area(mascaras: dict, dem: np.ndarray, area_pixel_m2: float,
+                      recorte: np.ndarray = None) -> dict:
+    """
+    Converte contagem de pixels em km² e percentuais da área emersa atual.
+
+    `recorte` (opcional, bool na forma do dem): conta só o que cai dentro dele.
+    Sem recorte o comportamento é idêntico ao anterior.
+    """
     a = area_pixel_m2 / 1e6  # km² por pixel
-    area_terra = float(np.isfinite(dem).sum()) * a
-    area_inund = float(mascaras["inundada"].sum()) * a
-    area_isol = float(mascaras["isolada"].sum()) * a
-    area_bath = float(mascaras["abaixo"].sum()) * a
+    if recorte is None:
+        area_terra = float(np.isfinite(dem).sum()) * a
+        area_inund = float(mascaras["inundada"].sum()) * a
+        area_isol = float(mascaras["isolada"].sum()) * a
+        area_bath = float(mascaras["abaixo"].sum()) * a
+    else:
+        area_terra = float((np.isfinite(dem) & recorte).sum()) * a
+        area_inund = float((mascaras["inundada"] & recorte).sum()) * a
+        area_isol = float((mascaras["isolada"] & recorte).sum()) * a
+        area_bath = float((mascaras["abaixo"] & recorte).sum()) * a
 
     est = {
         "area_terra_km2":        area_terra,
@@ -563,7 +642,8 @@ def estatisticas_area(mascaras: dict, dem: np.ndarray, area_pixel_m2: float) -> 
         "pct_isolada":           100.0 * area_isol / area_terra if area_terra else np.nan,
         "superestimativa_bathtub_km2": area_bath - area_inund,
     }
-    _print(f"[AREA] terra={area_terra:.1f} km² | inundada={area_inund:.1f} km² "
+    _print(f"[AREA]{' (recorte)' if recorte is not None else ''} "
+          f"terra={area_terra:.1f} km² | inundada={area_inund:.1f} km² "
           f"({est['pct_inundada']:.1f}%) | isolada={area_isol:.1f} km² | "
           f"bathtub ingênuo superestima em {est['superestimativa_bathtub_km2']:.1f} km²")
     return est
@@ -575,8 +655,12 @@ def tabela_cenarios(dados_dem: dict,
                     percentis: list = ("mediana", "p83"),
                     mare_m: float = 0.0,
                     conectividade: bool = True,
-                    mascara_agua: np.ndarray = None) -> pd.DataFrame:
+                    mascara_agua: np.ndarray = None,
+                    recorte: np.ndarray = None) -> pd.DataFrame:
     """
+    `recorte`: ver `estatisticas_area` (só na contagem; o flood-fill roda
+    no domínio inteiro).
+
     Roda a simulação para a matriz cenário × horizonte × percentil e
     devolve a tabela pronta para o relatório.
     """
@@ -594,7 +678,8 @@ def tabela_cenarios(dados_dem: dict,
                     area_pixel_m2=dados_dem["area_pixel_m2"],
                     mascara_agua=mascara_agua,
                 )
-                e = estatisticas_area(m, dados_dem["dem"], dados_dem["area_pixel_m2"])
+                e = estatisticas_area(m, dados_dem["dem"], dados_dem["area_pixel_m2"],
+                              recorte=recorte)
                 linhas.append({
                     "Cenário": nome, "Horizonte": str(ano), "Percentil": p,
                     "NMRM (m)": nmrm, "Cota total (m)": round(c["cota_m"], 2),
@@ -610,7 +695,8 @@ def tabela_cenarios(dados_dem: dict,
                               conectividade=conectividade,
                               area_pixel_m2=dados_dem["area_pixel_m2"],
                               mascara_agua=mascara_agua)
-        e = estatisticas_area(m, dados_dem["dem"], dados_dem["area_pixel_m2"])
+        e = estatisticas_area(m, dados_dem["dem"], dados_dem["area_pixel_m2"],
+                              recorte=recorte)
         linhas.append({
             "Cenário": "Sensibilidade (turma)", "Horizonte": "—", "Percentil": "—",
             "NMRM (m)": nivel, "Cota total (m)": round(c["cota_m"], 2),
@@ -626,7 +712,8 @@ def curva_exposicao(dados_dem: dict,
                     cotas: np.ndarray = None,
                     mare_m: float = 0.0,
                     conectividade: bool = True,
-                    mascara_agua: np.ndarray = None) -> pd.DataFrame:
+                    mascara_agua: np.ndarray = None,
+                    recorte: np.ndarray = None) -> pd.DataFrame:
     """
     Curva contínua área inundada × NMRM — a "curva hipsométrica efetiva".
     É o gráfico que transforma três mapas soltos em uma leitura de sensibilidade.
@@ -639,7 +726,8 @@ def curva_exposicao(dados_dem: dict,
                               conectividade=conectividade,
                               area_pixel_m2=dados_dem["area_pixel_m2"],
                               mascara_agua=mascara_agua)
-        e = estatisticas_area(m, dados_dem["dem"], dados_dem["area_pixel_m2"])
+        e = estatisticas_area(m, dados_dem["dem"], dados_dem["area_pixel_m2"],
+                              recorte=recorte)
         reg.append({"NMRM (m)": round(float(nmrm), 2),
                     "Cota (m)": round(c["cota_m"], 2),
                     "Área inundada (km²)": e["area_inundada_km2"],
@@ -656,7 +744,7 @@ def _carimbo() -> str:
 
 
 def exportar_geotiff(mascaras: dict, dados_dem: dict, caminho_saida: str,
-                     cota_m: float) -> str:
+                     cota_m: float, recorte: np.ndarray = None) -> str:
     """
     Grava raster classificado (0=terra, 1=inundada, 2=depressão isolada,
     3=oceano atual) em GeoTIFF, pronto para o QGIS e para o cruzamento
@@ -667,6 +755,8 @@ def exportar_geotiff(mascaras: dict, dados_dem: dict, caminho_saida: str,
     classes[mascaras["isolada"]] = 2
     classes[mascaras["inundada"]] = 1
     classes[dados_dem["mask_oceano"]] = 3
+    if recorte is not None:
+        classes[~recorte] = 255   # nodata: fora da área da turma
 
     perfil = dados_dem["perfil"].copy()
     perfil.update(dtype="uint8", count=1, nodata=255, compress="lzw")
@@ -680,6 +770,8 @@ def exportar_geotiff(mascaras: dict, dados_dem: dict, caminho_saida: str,
             fonte_mde="FABDEM V1-2 (Univ. Bristol)",
             classes="0=terra 1=inundada 2=depressao_isolada 3=oceano_atual",
             gerado_em=datetime.now().isoformat(timespec="seconds"),
+            recorte_turma=("sim: 255 (nodata) fora da area da turma"
+                           if recorte is not None else "nao"),
         )
     _print(f"[EXPORT] GeoTIFF salvo: {caminho_saida}")
     return caminho_saida
@@ -709,10 +801,40 @@ def hillshade(dem: np.ndarray, res_m: float, exagero: int = None,
     return ls.hillshade(z, vert_exag=exagero, dx=res_m, dy=res_m)
 
 
-def _barra_escala(ax, transform, largura_px, comprimento_km=5):
-    """Barra de escala simples em coordenadas de pixel."""
+def _comprimento_barra_km(largura_km: float) -> int:
+    """
+    Comprimento redondo de barra de escala para um mapa de `largura_km`: o
+    valor da série 1-2-5 x 10^n mais próximo de `fracao_barra_escala` da
+    largura. Existe porque a figura passou a enquadrar desde a planície (66 km)
+    até a área de estudo inteira (240 km): uma barra fixa de 5 km fica ilegível
+    num caso e desproporcional no outro.
+    """
+    alvo = max(largura_km * CONFIG_MAPA["fracao_barra_escala"], 0.5)
+    candidatos = [m * 10 ** e for e in range(0, 4) for m in (1, 2, 5)]
+    return int(min(candidatos, key=lambda v: abs(v - alvo)))
+
+
+def _barra_escala(ax, transform, largura_px, comprimento_km=None, quadro=None):
+    """
+    Barra de escala simples em coordenadas de pixel. `quadro` = (col_min,
+    col_max, lin_topo, lin_base) do enquadramento recortado; sem ele, a
+    posição é a de sempre (relativa ao raster inteiro). `comprimento_km=None`
+    escolhe um valor redondo proporcional à largura do quadro.
+    """
     res = abs(transform.a)
+    if comprimento_km is None:
+        larg_px = (quadro[1] - quadro[0]) if quadro is not None else largura_px
+        comprimento_km = _comprimento_barra_km(larg_px * res / 1000.0)
     n_px = comprimento_km * 1000 / res
+    if quadro is not None:
+        c0, c1, l_topo, l_base = quadro
+        x0 = c0 + 0.06 * (c1 - c0)
+        y0 = l_base - 0.06 * (l_base - l_topo)
+        ax.plot([x0, x0 + n_px], [y0, y0], color="k", lw=3, solid_capstyle="butt", zorder=10)
+        ax.text(x0 + n_px / 2, y0, f"{comprimento_km} km", ha="center", va="bottom",
+                fontsize=8, zorder=10,
+                bbox=dict(fc="white", ec="none", alpha=0.75, pad=1.5))
+        return
     x0 = largura_px * 0.06
     y0 = ax.get_ylim()[0] * 0.94 if ax.get_ylim()[0] > ax.get_ylim()[1] else ax.get_ylim()[1] * 0.94
     ax.plot([x0, x0 + n_px], [y0, y0], color="k", lw=3, solid_capstyle="butt", zorder=10)
@@ -829,14 +951,54 @@ def _linhas_geometria(geometria, transform, crs_origem: str) -> list:
     return []
 
 
-def _desenhar_camadas_turma(ax, transform, camadas_turma: dict,
-                            ver_area_turma: bool, ver_isobatas_turma: bool,
-                            ver_ucs_turma: bool) -> list:
+def _bbox_pixel_geojson(geojson: dict, transform,
+                        crs_origem: str = "EPSG:4674") -> tuple | None:
     """
-    Desenha as três camadas de contexto da turma por cima da lâmina d'água,
+    Envelope de um FeatureCollection em coordenadas de PIXEL da grade do MDE:
+    (col_min, col_max, lin_min, lin_max). Pode devolver valores negativos ou
+    maiores que a grade — é de propósito. A conversão geo->pixel é uma afim, e
+    ela continua valendo fora do raster; é isso que permite a figura enquadrar
+    a área de estudo inteira, inclusive a parte de plataforma que o FABDEM não
+    cobre. `None` se nenhuma feição tiver geometria utilizável.
+    """
+    xs, ys = [], []
+    for feicao in (geojson or {}).get("features", []):
+        path = _path_geometria(feicao["geometry"], transform, crs_origem)
+        if path is None:
+            continue
+        v = path.vertices
+        xs += [float(v[:, 0].min()), float(v[:, 0].max())]
+        ys += [float(v[:, 1].min()), float(v[:, 1].max())]
+    if not xs:
+        return None
+    return (min(xs), max(xs), min(ys), max(ys))
+
+
+def _preencher_geojson(ax, geojson: dict, transform, cor: str, zorder: int,
+                       crs_origem: str = "EPSG:4674") -> None:
+    """
+    Pinta as feições de um FeatureCollection com `cor`, sem borda. Usado para
+    o mar DENTRO da área de estudo: como polígono, e não como imagem sobre a
+    grade, porque a área de estudo se estende muito além do raster do MDE — um
+    `imshow` pararia na borda da grade e desenharia um retângulo azul com cara
+    de dado, que é justamente o que não pode aparecer no mapa.
+    """
+    for feicao in (geojson or {}).get("features", []):
+        path = _path_geometria(feicao["geometry"], transform, crs_origem)
+        if path is not None:
+            ax.add_patch(PathPatch(path, facecolor=cor, edgecolor="none",
+                                   zorder=zorder))
+
+
+def _desenhar_camadas_turma(ax, transform, camadas_turma: dict,
+                            ver_isobatas_turma: bool,
+                            ver_ucs_turma: bool,
+                            ver_limite_turma: bool = False) -> list:
+    """
+    Desenha as camadas de contexto da turma por cima da lâmina d'água,
     em pixel (ver `_geo_para_pixel`). Ordem de zorder (`CONFIG_CAMADAS_FIG`):
-    área de trabalho (só contorno) -> isóbatas (linhas) -> UCs (contorno +
-    preenchimento translúcido).
+    isóbatas (linhas) -> UCs (contorno + preenchimento translúcido) ->
+    limite da área de estudo (só contorno, por cima de tudo).
 
     `camadas_turma` é o MESMO dict que `mapa_web.carregar_camadas_turma`
     devolve — passado por quem chama, porque o motor não lê arquivo de
@@ -851,21 +1013,6 @@ def _desenhar_camadas_turma(ax, transform, camadas_turma: dict,
     cfg = CONFIG_CAMADAS_FIG
     xlim, ylim = ax.get_xlim(), ax.get_ylim()
     itens_legenda = []
-
-    geo_area = camadas_turma.get("area_turma")
-    if ver_area_turma and geo_area is not None:
-        c = cfg["area_turma"]
-        visivel = False
-        for feicao in geo_area.get("features", []):
-            path = _path_geometria(feicao["geometry"], transform, "EPSG:4674")
-            if path is None:
-                continue
-            ax.add_patch(PathPatch(path, facecolor="none", edgecolor=c["cor_borda"],
-                                   linewidth=c["espessura"], zorder=c["zorder"]))
-            visivel = visivel or _dentro_do_quadro(path.vertices.tolist(), xlim, ylim)
-        if visivel:
-            itens_legenda.append({"tipo": "linha", "cor": c["cor_borda"],
-                                  "rotulo": "Área de trabalho da turma"})
 
     geo_iso = camadas_turma.get("isobatas")
     if ver_isobatas_turma and geo_iso is not None:
@@ -903,6 +1050,22 @@ def _desenhar_camadas_turma(ax, transform, camadas_turma: dict,
                                   "alpha": c["alpha_preenchimento"],
                                   "rotulo": "Unidades de conservação"})
 
+    # Limite único da turma — por último, por cima das demais.
+    geo_limite = camadas_turma.get("limite")
+    if ver_limite_turma and geo_limite is not None:
+        c = cfg["limite"]
+        visivel = False
+        for feicao in geo_limite.get("features", []):
+            path = _path_geometria(feicao["geometry"], transform, "EPSG:4674")
+            if path is None:
+                continue
+            ax.add_patch(PathPatch(path, facecolor="none", edgecolor=c["cor_borda"],
+                                   linewidth=c["espessura"], zorder=c["zorder"]))
+            visivel = visivel or _dentro_do_quadro(path.vertices.tolist(), xlim, ylim)
+        if visivel:
+            itens_legenda.append({"tipo": "linha", "cor": c["cor_borda"],
+                                  "rotulo": "Limite da área da turma"})
+
     # `add_patch`/`plot` podem alargar xlim/ylim automaticamente (autoscale) —
     # restaura o quadro do raster, senão o estuário vira um ponto perdido no
     # meio da plataforma continental.
@@ -921,9 +1084,11 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
                 tema: str = "claro",
                 figsize=(11, 9),
                 camadas_turma: dict = None,
-                ver_area_turma: bool = False,
                 ver_isobatas_turma: bool = False,
-                ver_ucs_turma: bool = False):
+                ver_ucs_turma: bool = False,
+                ver_limite_turma: bool = False,
+                recorte: np.ndarray = None,
+                enquadramento: str = "area_estudo"):
     """
     Monta a figura de relatório: hillshade + hipsometria + lâmina d'água,
     com legenda, barra de escala, seta norte e créditos de fonte.
@@ -934,10 +1099,23 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
           do slider na interface; use `hillshade()` uma única vez).
 
     `camadas_turma`: o MESMO dict que `mapa_web.carregar_camadas_turma`
-    devolve ({"area_turma", "isobatas", "ucs"}), passado por quem chama — o
+    devolve ({"isobatas", "ucs", "limite"}), passado por quem chama — o
     motor não lê arquivo de interface (regra 5 do projeto). Os três
     `ver_*_turma` ligam cada camada, todos desligados por padrão; ver
     `_desenhar_camadas_turma` para a lógica de desenho e de legenda.
+
+    `enquadramento`: com recorte, `"area_estudo"` enquadra o polígono inteiro
+    (inclusive a plataforma sem MDE) e `"planicie"` enquadra só a parte com
+    MDE, onde a exposição acontece. Não muda número nenhum — os dois contam
+    exatamente a mesma coisa.
+
+    `recorte`: bool na forma do MDE (`mascara_recorte`). A figura passa a
+    mostrar SÓ o que está dentro dele: lâminas d'água, terreno e escala de cor
+    hipsométrica, tudo recortado, e o enquadramento fecha no bbox do recorte.
+    O terreno de fora não é desenhado (`CONFIG_MAPA["alpha_fora_recorte"] = 0`;
+    um valor maior o traz de volta como fantasma). A máscara em si foi
+    resolvida no domínio INTEIRO antes de chegar aqui (ver `mascara_recorte`) —
+    o recorte é de relato, não de cálculo.
 
     Retorna (fig, ax) — quem chamou decide se salva ou exibe.
     """
@@ -952,15 +1130,48 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
 
     fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
     fig.patch.set_facecolor(pal["fundo_figura"])
-    ax.set_facecolor(CONFIG_MAPA["cor_oceano"])
+
+    # Sem recorte, o fundo do eixo É o oceano — o raster inteiro é o mapa.
+    # Com recorte, não pode ser: o que fica de fora (planície continental a
+    # oeste) apareceria pintado de azul-oceano, e terra alta lida como mar é
+    # exatamente o erro que este mapa existe para não cometer. Então o fundo
+    # vira o papel da figura e o mar é desenhado só DENTRO da área de estudo.
+    #
+    # E é desenhado como POLÍGONO, não como imagem sobre a grade: a área de
+    # estudo vai até a isóbata de 500 m, muito além do raster do FABDEM, então
+    # uma imagem pararia na borda da grade e deixaria um retângulo azul de
+    # canto reto — com cara de dado, que é o pior que um mapa pode fazer. Com
+    # o polígono, o mar termina exatamente onde o traçado da turma termina.
+    ax.set_facecolor(CONFIG_MAPA["cor_oceano"] if recorte is None
+                     else pal["fundo_figura"])
+    geo_limite_fig = (camadas_turma or {}).get("limite")
+    if recorte is not None and geo_limite_fig is not None:
+        _preencher_geojson(ax, geo_limite_fig, dados_dem["transform"],
+                           CONFIG_MAPA["cor_oceano"], zorder=0)
+    elif recorte is not None:
+        # Sem a camada do limite (arquivo ausente), o melhor que dá é a
+        # máscara rasterizada — volta o canto reto na borda da grade, mas é
+        # melhor que mar nenhum. A interface avisa quando o limite não carrega.
+        ax.imshow(np.ma.masked_where(~recorte, recorte),
+                  cmap=colors.ListedColormap([CONFIG_MAPA["cor_oceano"]]),
+                  interpolation="nearest", zorder=0)
+
+    alpha_dem = np.isfinite(dem).astype(float)
+    if recorte is not None:
+        alpha_dem = np.where(recorte, alpha_dem,
+                             alpha_dem * CONFIG_MAPA["alpha_fora_recorte"])
 
     if fundo == "hipsometrico":
-        vmax = float(np.nanpercentile(dem, 99.5))
+        # A escala de cor é calculada SÓ sobre o que vai aparecer: com recorte,
+        # o platô do Grupo Barreiras fica de fora e não tem por que continuar
+        # esticando a rampa (em Caravelas ele já gasta a faixa de cor toda).
+        _dem_escala = dem if recorte is None else np.where(recorte, dem, np.nan)
+        vmax = float(np.nanpercentile(_dem_escala, 99.5))
         norm = colors.Normalize(vmin=0, vmax=max(vmax, 1.0))
         cmap_topo = matplotlib.colormaps[CONFIG_MAPA["cmap_topo"]]
         rgb = cmap_topo(norm(np.nan_to_num(dem)))
         rgb[..., :3] *= (0.35 + 0.65 * hs)[..., None]
-        rgb[..., 3] = np.isfinite(dem).astype(float)
+        rgb[..., 3] = alpha_dem
         ax.imshow(rgb, interpolation="nearest")
         mapa_cores = cm.ScalarMappable(norm=norm, cmap=CONFIG_MAPA["cmap_topo"])
         cb = fig.colorbar(mapa_cores, ax=ax, shrink=0.62, pad=0.01)
@@ -971,15 +1182,18 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
     elif fundo == "hillshade":
         ax.imshow(np.where(np.isfinite(dem), hs, np.nan), cmap="gray",
                   vmin=pal["hillshade_vmin"], vmax=pal["hillshade_vmax"],
-                  interpolation="nearest")
+                  interpolation="nearest",
+                  alpha=alpha_dem if recorte is not None else None)
 
-    # Lâmina d'água conectada
-    ax.imshow(np.ma.masked_where(~mascaras["inundada"], mascaras["inundada"]),
+    # Lâmina d'água conectada. Com recorte, o corte é feito AQUI, no desenho.
+    inundada = mascaras["inundada"] if recorte is None else mascaras["inundada"] & recorte
+    isolada = mascaras["isolada"] if recorte is None else mascaras["isolada"] & recorte
+    ax.imshow(np.ma.masked_where(~inundada, inundada),
               cmap=colors.ListedColormap([CONFIG_MAPA["cor_inundado"]]),
               alpha=CONFIG_MAPA["alpha_agua"], interpolation="nearest")
 
-    if mostrar_isoladas and mascaras["isolada"].any():
-        ax.imshow(np.ma.masked_where(~mascaras["isolada"], mascaras["isolada"]),
+    if mostrar_isoladas and isolada.any():
+        ax.imshow(np.ma.masked_where(~isolada, isolada),
                   cmap=colors.ListedColormap([CONFIG_MAPA["cor_isolado"]]),
                   alpha=CONFIG_MAPA["alpha_agua"], interpolation="nearest")
 
@@ -987,10 +1201,67 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
     # da legenda (que ainda vai ganhar os itens destas camadas, se alguma
     # tiver desenhado algo dentro do quadro). `_desenhar_camadas_turma` já
     # restaura xlim/ylim no fim — o quadro aqui embaixo é o mesmo de antes.
+    # ENQUADRAMENTO — fixado ANTES de desenhar as camadas vetoriais, por dois
+    # motivos: `_desenhar_camadas_turma` salva e restaura o quadro que
+    # encontra, e o teste de "esta camada aparece na legenda?" usa esse mesmo
+    # quadro. Com o quadro certo aqui, a isóbata de 200 m (que fica a leste da
+    # grade do MDE, mas dentro da área de estudo) entra na legenda como deve.
+    #
+    # O envelope vem do POLÍGONO da área de estudo, não da máscara
+    # rasterizada: a máscara é recortada pela grade do MDE e devolveria o
+    # retângulo da grade, que é justamente o que se quer evitar. Sem a camada
+    # do limite, cai para o bbox da máscara, limitado à grade.
+    quadro = None
+    if recorte is not None:
+        # "area_estudo": o polígono inteiro, inclusive a plataforma que o
+        # FABDEM não cobre — mostra a área de trabalho como ela é, mas a
+        # planície fica pequena (~8 % da largura).
+        # "planicie": o bbox da máscara RASTERIZADA, ou seja, a parte da área
+        # de estudo que tem MDE — é onde a exposição acontece e onde a leitura
+        # fina vale a pena. Os NÚMEROS são idênticos nos dois: enquadramento
+        # não é recorte, só decide o que entra no quadro da figura.
+        env = None
+        if enquadramento == "area_estudo":
+            env = _bbox_pixel_geojson(geo_limite_fig, dados_dem["transform"])
+        if env is None and recorte.any():
+            lins = np.where(recorte.any(axis=1))[0]
+            cols = np.where(recorte.any(axis=0))[0]
+            env = (float(cols.min()), float(cols.max() + 1),
+                   float(lins.min()), float(lins.max() + 1))
+        if env is not None:
+            c0, c1, l0, l1 = env
+            marg = CONFIG_MAPA["margem_enquadramento"]
+            dc, dl = marg * (c1 - c0), marg * (l1 - l0)
+            quadro = (c0 - dc, c1 + dc, l0 - dl, l1 + dl)
+            ax.set_xlim(quadro[0], quadro[1])
+            ax.set_ylim(quadro[3], quadro[2])
+
+            # A área de estudo é bem mais larga que alta (vai da costa até a
+            # isóbata de 500 m). Com o `figsize` fixo e aspecto igual — que o
+            # mapa exige, senão a planície entorta —, o eixo viraria uma tira
+            # no meio de uma página vazia. Então a figura é reproporcionada
+            # para o quadro, mantendo a MESMA ÁREA em polegadas: o mapa cresce
+            # em vez de sobrar papel. Limitado por `aspecto_max` para não virar
+            # uma faixa impossível de ler num relatório.
+            larg, alt = quadro[1] - quadro[0], quadro[3] - quadro[2]
+            if larg > 0 and alt > 0:
+                razao = min(max(larg / alt, 1.0 / CONFIG_MAPA["aspecto_max"]),
+                            CONFIG_MAPA["aspecto_max"])
+                area_pol = float(figsize[0]) * float(figsize[1])
+                nova_larg = (area_pol * razao) ** 0.5
+                fig.set_size_inches(nova_larg, area_pol / nova_larg)
+
     itens_turma = _desenhar_camadas_turma(
         ax, dados_dem["transform"], camadas_turma,
-        ver_area_turma, ver_isobatas_turma, ver_ucs_turma,
+        ver_isobatas_turma, ver_ucs_turma, ver_limite_turma,
     )
+
+    # O quadro já foi fixado antes de `_desenhar_camadas_turma`, que o salva
+    # e restaura; aqui só se reafirma, porque `add_patch`/`plot` podem ter
+    # mexido no autoscale no meio do caminho.
+    if quadro is not None:
+        ax.set_xlim(quadro[0], quadro[1])
+        ax.set_ylim(quadro[3], quadro[2])   # linha cresce para baixo
 
     ax.set_xticks([]); ax.set_yticks([])
     for s in ax.spines.values():
@@ -1008,14 +1279,26 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
                 xycoords="axes fraction", ha="center", fontsize=11, weight="bold",
                 arrowprops=dict(arrowstyle="-|>", color="k", lw=1.6))
 
-    _barra_escala(ax, dados_dem["transform"], dem.shape[1])
+    _barra_escala(ax, dados_dem["transform"], dem.shape[1], quadro=quadro)
 
     itens = [Patch(fc=CONFIG_MAPA["cor_inundado"], alpha=CONFIG_MAPA["alpha_agua"],
                    label="Inundação conectada ao mar")]
-    if mostrar_isoladas and mascaras["isolada"].any():
+    if mostrar_isoladas and isolada.any():
         itens.append(Patch(fc=CONFIG_MAPA["cor_isolado"], alpha=CONFIG_MAPA["alpha_agua"],
                            label="Abaixo da cota, sem conexão hidráulica"))
     itens.append(Patch(fc=CONFIG_MAPA["cor_oceano"], label="Oceano atual (FABDEM)"))
+    if recorte is not None and CONFIG_MAPA["alpha_fora_recorte"] > 0:
+        # Só entra na legenda se o terreno de fora estiver de fato desenhado.
+        # Com o recorte duro (alpha 0, o padrão) não há o que legendar — e uma
+        # amostra de algo invisível no mapa é pior que amostra nenhuma.
+        # A amostra precisa mostrar a cor QUE APARECE no mapa, não a cor
+        # nominal: o terreno de fora é hillshade desenhado com alpha sobre o
+        # fundo de oceano. A mistura é feita na mão, e o patch vai opaco.
+        _cinza = np.array(to_rgb(CONFIG_MAPA["cor_cinza_fora"]))
+        _fundo = np.array(to_rgb(CONFIG_MAPA["cor_oceano"]))
+        _a = CONFIG_MAPA["alpha_fora_recorte"]
+        itens.append(Patch(fc=tuple(_a * _cinza + (1 - _a) * _fundo),
+                           label="Terreno fora da área da turma (não contado)"))
 
     # Itens de legenda das camadas da turma — só as que `_desenhar_camadas_turma`
     # confirmou visíveis dentro do quadro (ligar o toggle não garante isso).
@@ -1026,13 +1309,40 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
             itens.append(Patch(fc=item["cor_preenchimento"], alpha=item["alpha"],
                                ec=item["cor_borda"], label=item["rotulo"]))
 
-    ax.legend(handles=itens, loc="lower right", fontsize=8, framealpha=0.9)
+    # Num quadro largo (área de estudo inteira) a caixa de legenda no canto
+    # inferior direito cobre justamente o traçado do limite. Nesse caso ela sai
+    # do mapa e vira uma faixa horizontal abaixo dele; no quadro estreito
+    # (planície) segue no canto, que é onde há mar vazio.
+    _largo = quadro is not None and (quadro[1] - quadro[0]) > 1.6 * (quadro[3] - quadro[2])
+    if _largo:
+        ax.legend(handles=itens, loc="upper left", bbox_to_anchor=(0.0, -0.02),
+                  ncol=min(len(itens), 3), fontsize=8, framealpha=0.9,
+                  borderaxespad=0.0)
+    else:
+        ax.legend(handles=itens, loc="lower right", fontsize=8, framealpha=0.9)
 
     creditos = (f"MDE: FABDEM V1-2 (Hawker et al. 2022) · datum vertical {CONFIG_DEM['datum_vertical']} · "
                 f"EPSG:{CONFIG_DEM['epsg_projetado']} @ {res:.0f} m · "
                 f"cota = {cota['cota_m']:.2f} m\n"
                 f"Cenários: IPCC AR6 WGI Cap. 9 · Exposição potencial, não previsão de inundação real.")
-    ax.text(0, -0.028, creditos, transform=ax.transAxes, fontsize=7,
+    if recorte is not None:
+        a_km2 = dados_dem["area_pixel_m2"] / 1e6
+        t_dentro = float((np.isfinite(dem) & recorte).sum()) * a_km2
+        t_total = float(np.isfinite(dem).sum()) * a_km2
+        aviso_recorte = (f"Recorte à área de estudo da turma (~{CONFIG_MAPA['limite_turma_km2']:,.0f} km², quase toda "
+                         f"plataforma continental): os km² contados são a TERRA dessa área que o MDE cobre "
+                         f"— {t_dentro:,.0f} km², de {t_total:,.0f} km² de terra no domínio. Fica de fora a planície "
+                         f"continental a oeste (terreno alto do Grupo Barreiras, onde a inundação não chega), "
+                         f"que o modo Livre conta e que dilui a porcentagem.")
+        # Linhas curtas: uma linha longa alarga o layout e o constrained_layout
+        # desiste ("axes sizes collapsed to zero"). 110 caracteres cabem na
+        # largura do eixo tanto na figura larga quanto na estreita.
+        creditos += "\n" + textwrap.fill(aviso_recorte, width=110)
+    # Com a legenda embaixo do mapa (quadro largo), os créditos descem para
+    # não escrever por cima dela. O deslocamento é em fração do eixo, então
+    # acompanha a altura da figura sem número mágico em pixel.
+    _y_creditos = -0.028 - (CONFIG_MAPA["desloca_creditos_legenda"] if _largo else 0.0)
+    ax.text(0, _y_creditos, creditos, transform=ax.transAxes, fontsize=7,
             va="top", color=pal["texto_fraco"])
 
     return fig, ax

@@ -60,7 +60,8 @@ CODIGOS_CLASSE = {
 # CLASSIFICAÇÃO
 # =============================================================================
 
-def classificar_overlay(mascaras: dict, mask_agua: np.ndarray = None) -> np.ndarray:
+def classificar_overlay(mascaras: dict, mask_agua: np.ndarray = None,
+                       recorte: np.ndarray = None) -> np.ndarray:
     """
     Monta o array uint8 de classes a partir do dict retornado por
     `slr_core.mascara_inundacao`. Água atual tem prioridade visual sobre
@@ -73,7 +74,27 @@ def classificar_overlay(mascaras: dict, mask_agua: np.ndarray = None) -> np.ndar
     classes[mascaras["inundada"]] = CODIGOS_CLASSE["inundada"]
     if mask_agua is not None:
         classes[mask_agua] = CODIGOS_CLASSE["agua_atual"]
+    if recorte is not None:
+        # Zera fora do recorte -> alpha 0 no PNG. As máscaras já foram
+        # resolvidas no domínio inteiro; o corte é só de exibição.
+        classes[~recorte] = 0
     return classes
+
+
+def bounds_recorte(recorte: np.ndarray, transform, crs) -> list | None:
+    """
+    [[sul, oeste], [norte, leste]] em EPSG:4326 do bbox do recorte (pixels
+    True), para `folium.Map.fit_bounds`. None se o recorte estiver vazio.
+    """
+    if recorte is None or not recorte.any():
+        return None
+    lins = np.where(recorte.any(axis=1))[0]
+    cols = np.where(recorte.any(axis=0))[0]
+    x0, y0 = transform * (cols.min(), lins.min())
+    x1, y1 = transform * (cols.max() + 1, lins.max() + 1)
+    lons, lats = warp_transform(crs, CRS.from_epsg(CONFIG_MAPA_WEB["epsg_saida"]),
+                                [x0, x1, x0, x1], [y0, y0, y1, y1])
+    return [[min(lats), min(lons)], [max(lats), max(lons)]]
 
 
 # =============================================================================
@@ -238,9 +259,15 @@ def faixa_da_cota(z: float, teto_m: float | None = None) -> dict | None:
     return itens[i]
 
 
-def gerar_overlay_hipsometrico(dem: np.ndarray, transform, crs) -> tuple:
+def gerar_overlay_hipsometrico(dem: np.ndarray, transform, crs,
+                               recorte: np.ndarray = None) -> tuple:
     """
     Overlay de elevação em faixas, no mesmo esquema do overlay de inundação.
+
+    `recorte` (bool na forma do dem): pixels de fora saem como 0, que o
+    codificador trata como transparente. No modo Turma o mapa mostra só o
+    terreno da área de estudo — inclusive esta camada, que antes vinha do
+    domínio inteiro e mostrava relevo que não entra em conta nenhuma.
 
     ATENÇÃO ao motivo de classificar ANTES de reprojetar: a faixa é um dado
     CATEGÓRICO, então a reprojeção pode usar `nearest` e nenhum pixel muda de
@@ -258,11 +285,15 @@ def gerar_overlay_hipsometrico(dem: np.ndarray, transform, crs) -> tuple:
     idx = np.searchsorted(faixas, np.where(valido, dem, 0.0), side="right")
     idx = np.clip(idx, 1, len(faixas)).astype("uint8")
     idx[~valido] = 0  # 0 = transparente
+    if recorte is not None:
+        idx[~recorte] = 0
 
     cores = {i + 1: cor for i, cor in enumerate(CONFIG_TOPO["cores"])}
     uri, bounds = gerar_overlay_web(idx, transform, crs, cores)
+    _dentro = dem if recorte is None else np.where(recorte, dem, np.nan)
     print(f"[TOPO] hipsométrico: {len(cores)} faixas | "
-          f"z de {np.nanmin(dem):.2f} a {np.nanmax(dem):.2f} m")
+          f"z de {np.nanmin(_dentro):.2f} a {np.nanmax(_dentro):.2f} m"
+          f"{' | recortado' if recorte is not None else ''}")
     return uri, bounds
 
 
@@ -311,9 +342,17 @@ def _simplifica_rdp(pontos: np.ndarray, tolerancia: float) -> np.ndarray:
 
 
 def gerar_isolinhas_geojson(dem: np.ndarray, transform, crs,
-                            niveis: list = None) -> dict:
+                            niveis: list = None,
+                            recorte: np.ndarray = None) -> dict:
     """
     Isolinhas do FABDEM em GeoJSON (EPSG:4326), uma Feature por nível.
+
+    `recorte` (bool na forma do dem): fora dele a grade vira NaN e o `contour`
+    simplesmente não traça ali. A ORDEM importa — o NaN entra DEPOIS do
+    preenchimento de oceano e DEPOIS da suavização: antes do preenchimento, a
+    borda do recorte viraria uma isolinha de 0,5 m falsa acompanhando o corte;
+    antes da suavização, o gaussiano espalharia NaN por toda a vizinhança do
+    kernel e comeria isolinha boa lá dentro.
 
     O oceano (nodata no MDE) é preenchido com 0,0 m ANTES do contorno. Não é
     chute: 0,0 é como o próprio FABDEM codifica oceano, e o efeito prático é
@@ -334,6 +373,8 @@ def gerar_isolinhas_geojson(dem: np.ndarray, transform, crs,
     z = np.where(np.isfinite(dem), dem, 0.0).astype("float32")
     if sigma > 0:
         z = ndimage.gaussian_filter(z, sigma=sigma)
+    if recorte is not None:
+        z = np.where(recorte, z, np.nan)   # ver docstring: só agora
     z = z[::f, ::f]
 
     # Coordenadas UTM do centro de cada pixel da grade subamostrada.
@@ -414,18 +455,12 @@ def valor_no_ponto(arr: np.ndarray, transform, crs, lat: float, lon: float):
 # CAMADAS DA ÁREA DE TRABALHO DA TURMA — vetoriais, EXTERNAS ao projeto
 # =============================================================================
 
-# A área da turma (UCs + plataforma até a isóbata de 500 m, ver
-# config.BBOX_TURMA) é quase toda oceânica e fora do domínio do FABDEM — ela
-# entra só como contexto vetorial por cima do mapa, nunca como raster.
-# Nenhum destes três GeoJSON é gerado por este projeto: são consumidos como
-# vieram (CNUC 07/2026 e Batimetria do Brasil CPRM/ANP 2013).
+# A área de estudo da turma é quase toda oceânica e fora do domínio do
+# FABDEM — ela entra só como contexto vetorial por cima do mapa, nunca como
+# raster. `isobatas` e `ucs` são consumidas como vieram (Batimetria do Brasil
+# CPRM/ANP 2013 e CNUC 07/2026); `limite` é produto do `09_limite_turma.py`,
+# que converte o shapefile desenhado no QGIS.
 CONFIG_CAMADAS_TURMA = {
-    "area_turma": {
-        "cor_preenchimento":   "#A9D6E5",
-        "alpha_preenchimento": 0.15,
-        "cor_borda":           "#2C7DA0",
-        "espessura_borda":     2.0,
-    },
     "isobatas": {
         # profundidade absoluta (m) -> cor, do claro (raso) ao escuro (fundo)
         "cores_por_profundidade_m": {
@@ -445,38 +480,52 @@ CONFIG_CAMADAS_TURMA = {
         "alpha_preenchimento": 0.18,
         "espessura_borda":     1.6,
     },
+    # Contorno externo da união UCs + área da turma (`09_limite_turma.py`).
+    # Sem preenchimento: a geometria de área fica no arquivo porque o recorte
+    # do modo Turma precisa dela, mas o desenho é só a borda.
+    "limite": {
+        # Cor de borda do estilo que o Helio definiu no QGIS (.qlr), para o
+        # limite ser a mesma linha aqui e lá. Sem preenchimento: o polígono
+        # cobre a área de estudo inteira, e preenchê-lo apagaria a leitura de
+        # exposição embaixo. A geometria de área está no arquivo porque o
+        # recorte precisa dela; o desenho é só a borda.
+        "cor_borda":           "#232323",
+        "alpha_preenchimento": 0.0,
+        "espessura_borda":     2.6,
+    },
 }
 
 
 def carregar_camadas_turma(dir_dados) -> dict:
     """
-    Lê os três GeoJSON da área de trabalho da turma com `json` da stdlib —
+    Lê os três GeoJSON da área de estudo da turma com `json` da stdlib —
     arquivos pequenos e estáticos, então não justificam adicionar geopandas
     ao requirements.txt; `folium.GeoJson` aceita dict puro.
 
-    Nenhum dos três é gerado por este projeto (regra: só consumir):
-    `config.ARQ_UCS_TURMA` vem do CNUC 07/2026 (ICMBio/MMA);
-    `config.ARQ_ISOBATAS_TURMA` e `config.ARQ_AREA_TURMA` vêm da Batimetria
-    do Brasil CPRM/ANP 2013 (derivada do GEBCO 925 m).
+    `config.ARQ_UCS_TURMA` vem do CNUC 07/2026 (ICMBio/MMA) e
+    `config.ARQ_ISOBATAS_TURMA` da Batimetria do Brasil CPRM/ANP 2013
+    (derivada do GEBCO 925 m) — nenhuma das duas é gerada aqui (regra: só
+    consumir). `config.ARQ_LIMITE_TURMA` é produto de `09_limite_turma.py`,
+    que converte o shapefile desenhado no QGIS.
 
     Dois ajustes de propriedade, só para o tooltip funcionar sem recalcular
     geodésia nem puxar geopandas:
-      - `area_turma`: injeta `area_km2_fmt` a partir de `config.AREA_TURMA_KM2`
-        (o GeoJSON só traz o nome).
+      - `limite`: injeta `area_km2_fmt` a partir da propriedade
+        `area_km2_aprox_esferica` do próprio GeoJSON.
       - `ucs`: injeta `ha_total_fmt`, o campo `ha_total` (string) formatado
         com separador de milhar, no mesmo estilo `:,.0f` usado no resto da
         interface (`02_simulador_nmrm.py`).
 
-    Retorna {"area_turma": dict|None, "isobatas": dict|None, "ucs": dict|None}.
+    Retorna {"isobatas", "ucs", "limite"}, cada um dict|None.
     Arquivo ausente ou ilegível não levanta exceção — a camada correspondente
     volta `None` e um aviso é impresso; quem chama decide como reagir (a
     interface simplesmente deixa de desenhar aquela camada).
     """
     dir_dados = str(dir_dados)
     arquivos = {
-        "area_turma": config.ARQ_AREA_TURMA,
         "isobatas":   config.ARQ_ISOBATAS_TURMA,
         "ucs":        config.ARQ_UCS_TURMA,
+        "limite":     config.ARQ_LIMITE_TURMA,
     }
 
     camadas: dict = {}
@@ -493,10 +542,17 @@ def carregar_camadas_turma(dir_dados) -> dict:
             print(f"[MAPA_WEB] falha ao ler {caminho}: {erro}")
             camadas[chave] = None
 
-    if camadas.get("area_turma") is not None:
-        for feicao in camadas["area_turma"].get("features", []):
-            feicao.setdefault("properties", {})["area_km2_fmt"] = \
-                f"{config.AREA_TURMA_KM2:,.0f}"
+    if camadas.get("limite") is not None:
+        # Número do PRÓPRIO arquivo (aferição esférica do `09_limite_turma.py`).
+        # Sem a propriedade, o tooltip mostra travessão — melhor um travessão
+        # que um número de outro polígono.
+        for feicao in camadas["limite"].get("features", []):
+            propriedades = feicao.setdefault("properties", {})
+            try:
+                propriedades["area_km2_fmt"] = \
+                    f"{float(propriedades['area_km2_aprox_esferica']):,.0f}"
+            except (KeyError, TypeError, ValueError):
+                propriedades["area_km2_fmt"] = "—"
 
     if camadas.get("ucs") is not None:
         for feicao in camadas["ucs"].get("features", []):
@@ -507,5 +563,5 @@ def carregar_camadas_turma(dir_dados) -> dict:
                 propriedades["ha_total_fmt"] = "—"
 
     n_ok = sum(v is not None for v in camadas.values())
-    print(f"[MAPA_WEB] camadas da turma: {n_ok}/3 carregadas")
+    print(f"[MAPA_WEB] camadas da turma: {n_ok}/{len(arquivos)} carregadas")
     return camadas
