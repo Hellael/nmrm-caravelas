@@ -24,7 +24,7 @@ SAÍDAS
     saidas/cobertura_classes_col11_<data>.csv
 
 USO
-    python 04_prepara_cobertura.py
+    python 04_prepara_cobertura.py      (lê DIR_AUXILIAR / config.ARQ_MAPBIOMAS_NACIONAL)
     python 04_prepara_cobertura.py "D:\\outro\\brazil_coverage-col11_2025.tif"
 
 NOTA CIENTÍFICA
@@ -35,6 +35,7 @@ NOTA CIENTÍFICA
 Autor: Helio | Assistência: Claude
 """
 
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -57,12 +58,6 @@ import src.cobertura as cob
 # =============================================================================
 
 CONFIG_PREPARA = {
-    # Onde procurar o raster nacional, em ordem. O primeiro que existir vence.
-    "candidatos_entrada": [
-        config.DIR_DADOS / "brazil_coverage-col11_2025.tif",
-        config.DIR_RAIZ / "dados" / "brazil_coverage-col11_2025.tif",
-        Path.home() / "OneDrive" / "Área de Trabalho" / "brazil_coverage-col11_2025.tif",
-    ],
     "arq_saida_local": "caravelas_mapbiomas_col11_2025_utm24s_30m.tif",
     "arq_saida_web":   "cobertura_web.tif",
     "dir_web":         "dados_web",
@@ -87,14 +82,18 @@ def _resolver_entrada(argumento: str = None) -> Path:
         if not caminho.exists():
             raise FileNotFoundError(f"Arquivo não encontrado: {caminho}")
         return caminho
-    for candidato in CONFIG_PREPARA["candidatos_entrada"]:
-        if Path(candidato).exists():
-            return Path(candidato)
-    raise FileNotFoundError(
-        "GeoTIFF nacional do MapBiomas não encontrado. Procurei em:\n  "
-        + "\n  ".join(str(c) for c in CONFIG_PREPARA["candidatos_entrada"])
-        + "\nPasse o caminho como argumento: python 04_prepara_cobertura.py <caminho>"
-    )
+    # Um lugar só (sem varredura silenciosa): DIR_AUXILIAR / ARQ_MAPBIOMAS_NACIONAL.
+    caminho = config.DIR_AUXILIAR / config.ARQ_MAPBIOMAS_NACIONAL
+    if not caminho.exists():
+        raise FileNotFoundError(
+            f"GeoTIFF nacional do MapBiomas não encontrado em:\n  {caminho}\n"
+            f"Esse caminho vem de config.DIR_AUXILIAR, que segue a variável de ambiente "
+            f"NMRM_DIR_DADOS (valor atual: {os.environ.get('NMRM_DIR_DADOS') or 'não definida'}; "
+            f"sem ela, dados/ dentro do repositório).\n"
+            f"Coloque o arquivo lá ou passe o caminho como argumento: "
+            f"python 04_prepara_cobertura.py <caminho>"
+        )
+    return caminho
 
 
 # =============================================================================

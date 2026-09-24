@@ -53,10 +53,7 @@ nmrm-caravelas/
 │   ├── logica_da_ferramenta.md        # como a ferramenta raciocina, ponta a ponta
 │   └── validacao_mapbiomas_laudo.md   # cobertura x Laudo biológico do Cassurubá
 ├── teste_sintetico.py         # valida o pipeline sem precisar do FABDEM
-├── dados/                     # entradas (NÃO versionar — FABDEM é CC BY-NC-SA)
-│   ├── fabdem/                # tiles brutos .tif
-│   ├── auxiliar/              # MapBiomas, GEBCO, maregrafia
-│   └── processado/            # caravelas_fabdem_utm24s_30m.tif
+├── dados/                     # SÓ se NMRM_DIR_DADOS não estiver definida (ver "Onde ficam os dados")
 ├── dados_web/                 # dados leves 30 m p/ deploy (VERSIONADO, ~2,3 MB)
 └── saidas/                    # PNG, GeoTIFF, CSV (NÃO versionar)
 ```
@@ -81,6 +78,18 @@ O simulador tem **modo duplo**. `src/fonte_dados.py` decide qual usar sem
 configuração manual: se `NMRM_DIR_DADOS` (ou `./dados/`) contém o MDE
 processado, roda em **modo local**; caso contrário, cai para o **modo web**
 usando `dados_web/`.
+
+### Onde ficam os dados (`NMRM_DIR_DADOS`)
+
+Os dados pesados **não** ficam no repositório. `config.py` lê a variável de
+ambiente `NMRM_DIR_DADOS`; nesta máquina ela vale `C:\dados_nmrm`, e é lá que
+vivem `fabdem/` (tiles brutos), `auxiliar/` (MapBiomas nacional
+`brazil_coverage-col11_2025.tif`, o recorte de cobertura, `ucs_regiao.geojson`)
+e `processado/` (MDE e máscara de água). **Sem a variável**, o projeto cai
+para `dados/` dentro do repositório (pasta ignorada pelo git, recriada por
+`config.criar_estrutura()`); se você clonou o repositório e não definiu a
+variável, é nessa pasta que as entradas precisam estar. Nenhum script lê
+`dados/` do repositório quando `NMRM_DIR_DADOS` está definida.
 
 ### Modo local — dados completos, flood-fill em tempo real
 
@@ -182,7 +191,7 @@ declarada à parte, no `LICENSE` da raiz.
    **`S20W040-S10W030_FABDEM_V1-2.zip`**, que contém Caravelas (~17,7°S / 39,2°W).
    Link direto:
    <https://data.bris.ac.uk/datasets/s5hqmjcdj8yo2ibzi9b4ew3sn/S20W040-S10W030_FABDEM_V1-2.zip>
-3. Extraia para `dados/fabdem/` os tiles de 1°×1° que intersectam o recorte:
+3. Extraia para `fabdem/` da pasta de dados (`NMRM_DIR_DADOS/fabdem`) os tiles de 1°×1° que intersectam o recorte:
    `S18W040`, `S18W039`, `S19W040` (o `S19W039` é opcional e pode não existir —
    é área quase toda oceânica).
 
@@ -194,7 +203,9 @@ Bases auxiliares (GEBCO 2025, constantes harmônicas BNDO/CHM): ver seção 4 do
 
 **MapBiomas.** Baixe o mosaico nacional de cobertura da Coleção 11
 (`brazil_coverage-col11_2025.tif`) em <https://brasil.mapbiomas.org>, coloque em
-`dados/` e rode:
+`auxiliar/` da pasta de dados (`$env:NMRM_DIR_DADOS/auxiliar`, ou `dados/auxiliar/`
+sem a variável) e rode. O `04` procura o arquivo **só** ali; ausente, ele para
+com um erro que diz onde o arquivo deveria estar:
 
 ```bash
 python 04_prepara_cobertura.py

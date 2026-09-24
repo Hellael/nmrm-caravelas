@@ -57,6 +57,11 @@ DIR_AUXILIAR = DIR_DADOS / "auxiliar"      # MapBiomas, GEBCO, maregrafia
 DIR_PROCESSADO = DIR_DADOS / "processado"  # MDE recortado e reprojetado
 DIR_SAIDAS = DIR_RAIZ / "saidas"           # figuras, GeoTIFF, CSV
 
+# Raster nacional do MapBiomas Col. 11 (~763 MB), entrada do 04_prepara_cobertura.py.
+# Vive em DIR_AUXILIAR — ou seja, em NMRM_DIR_DADOS/auxiliar quando a variável
+# de ambiente está definida.
+ARQ_MAPBIOMAS_NACIONAL = "brazil_coverage-col11_2025.tif"
+
 # Produto do 01_mapa_elevacao.py — entrada de todo o resto do projeto
 MDE_PROCESSADO = DIR_PROCESSADO / "caravelas_fabdem_utm24s_30m.tif"
 
