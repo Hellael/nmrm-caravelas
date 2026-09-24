@@ -1,0 +1,10 @@
+# Dependências SÓ dos scripts que GERAM produtos versionados de dados_web/.
+# NÃO são instaladas no ambiente do app: o Streamlit Community Cloud instala
+# apenas o requirements.txt, e o app lê esses produtos com json da stdlib.
+# Manter esta lista fora do requirements.txt é o que mantém o deploy leve.
+#
+# 08_prepara_camadas_turma.py  -> saidas/ucs_turma_regerado.geojson
+shapely>=2.0
+#
+# 07_mare_tpxo.py também precisa de numpy + netCDF4, mas roda em outra
+# máquina (contra o atlas TPXO9, ~10 GB) — ver o cabeçalho do script.

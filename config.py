@@ -62,6 +62,10 @@ DIR_SAIDAS = DIR_RAIZ / "saidas"           # figuras, GeoTIFF, CSV
 # de ambiente está definida.
 ARQ_MAPBIOMAS_NACIONAL = "brazil_coverage-col11_2025.tif"
 
+# CNUC bruto (42 UCs da região, CNUC 07/2026, ICMBio/MMA), insumo do
+# 08_prepara_camadas_turma.py. Também em DIR_AUXILIAR.
+ARQ_UCS_REGIAO = "ucs_regiao.geojson"
+
 # Produto do 01_mapa_elevacao.py — entrada de todo o resto do projeto
 MDE_PROCESSADO = DIR_PROCESSADO / "caravelas_fabdem_utm24s_30m.tif"
 
