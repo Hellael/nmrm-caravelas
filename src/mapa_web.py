@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import base64
 import io
+import json
+import os
 
 import numpy as np
 from matplotlib.colors import to_rgb
@@ -35,6 +37,8 @@ from rasterio.enums import Resampling
 from rasterio.transform import array_bounds, rowcol
 from rasterio.warp import calculate_default_transform, reproject, transform as warp_transform
 from scipy import ndimage
+
+import config
 
 # =============================================================================
 # PARÂMETROS
@@ -404,3 +408,104 @@ def valor_no_ponto(arr: np.ndarray, transform, crs, lat: float, lon: float):
     if isinstance(valor, np.floating) and not np.isfinite(valor):
         return None
     return valor.item()
+
+
+# =============================================================================
+# CAMADAS DA ÁREA DE TRABALHO DA TURMA — vetoriais, EXTERNAS ao projeto
+# =============================================================================
+
+# A área da turma (UCs + plataforma até a isóbata de 500 m, ver
+# config.BBOX_TURMA) é quase toda oceânica e fora do domínio do FABDEM — ela
+# entra só como contexto vetorial por cima do mapa, nunca como raster.
+# Nenhum destes três GeoJSON é gerado por este projeto: são consumidos como
+# vieram (CNUC 07/2026 e Batimetria do Brasil CPRM/ANP 2013).
+CONFIG_CAMADAS_TURMA = {
+    "area_turma": {
+        "cor_preenchimento":   "#A9D6E5",
+        "alpha_preenchimento": 0.15,
+        "cor_borda":           "#2C7DA0",
+        "espessura_borda":     2.0,
+    },
+    "isobatas": {
+        # profundidade absoluta (m) -> cor, do claro (raso) ao escuro (fundo)
+        "cores_por_profundidade_m": {
+            20:  "#BEE3F8",
+            50:  "#8FD0EF",
+            100: "#4FB6E0",
+            200: "#1D7FB8",
+            500: "#0B3D5C",
+        },
+        "cor_padrao":     "#4FB6E0",   # profundidade fora da lista acima
+        "espessura":      1.3,
+        "espessura_500m": 2.4,         # a mais funda se destaca das demais
+    },
+    "ucs": {
+        "cor_borda":           "#1B7A3D",
+        "cor_preenchimento":   "#3FA85C",
+        "alpha_preenchimento": 0.18,
+        "espessura_borda":     1.6,
+    },
+}
+
+
+def carregar_camadas_turma(dir_dados) -> dict:
+    """
+    Lê os três GeoJSON da área de trabalho da turma com `json` da stdlib —
+    arquivos pequenos e estáticos, então não justificam adicionar geopandas
+    ao requirements.txt; `folium.GeoJson` aceita dict puro.
+
+    Nenhum dos três é gerado por este projeto (regra: só consumir):
+    `config.ARQ_UCS_TURMA` vem do CNUC 07/2026 (ICMBio/MMA);
+    `config.ARQ_ISOBATAS_TURMA` e `config.ARQ_AREA_TURMA` vêm da Batimetria
+    do Brasil CPRM/ANP 2013 (derivada do GEBCO 925 m).
+
+    Dois ajustes de propriedade, só para o tooltip funcionar sem recalcular
+    geodésia nem puxar geopandas:
+      - `area_turma`: injeta `area_km2_fmt` a partir de `config.AREA_TURMA_KM2`
+        (o GeoJSON só traz o nome).
+      - `ucs`: injeta `ha_total_fmt`, o campo `ha_total` (string) formatado
+        com separador de milhar, no mesmo estilo `:,.0f` usado no resto da
+        interface (`02_simulador_nmrm.py`).
+
+    Retorna {"area_turma": dict|None, "isobatas": dict|None, "ucs": dict|None}.
+    Arquivo ausente ou ilegível não levanta exceção — a camada correspondente
+    volta `None` e um aviso é impresso; quem chama decide como reagir (a
+    interface simplesmente deixa de desenhar aquela camada).
+    """
+    dir_dados = str(dir_dados)
+    arquivos = {
+        "area_turma": config.ARQ_AREA_TURMA,
+        "isobatas":   config.ARQ_ISOBATAS_TURMA,
+        "ucs":        config.ARQ_UCS_TURMA,
+    }
+
+    camadas: dict = {}
+    for chave, nome_arq in arquivos.items():
+        caminho = os.path.join(dir_dados, nome_arq)
+        if not os.path.exists(caminho):
+            print(f"[MAPA_WEB] camada da turma ausente: {caminho}")
+            camadas[chave] = None
+            continue
+        try:
+            with open(caminho, encoding="utf-8") as f:
+                camadas[chave] = json.load(f)
+        except (OSError, ValueError) as erro:
+            print(f"[MAPA_WEB] falha ao ler {caminho}: {erro}")
+            camadas[chave] = None
+
+    if camadas.get("area_turma") is not None:
+        for feicao in camadas["area_turma"].get("features", []):
+            feicao.setdefault("properties", {})["area_km2_fmt"] = \
+                f"{config.AREA_TURMA_KM2:,.0f}"
+
+    if camadas.get("ucs") is not None:
+        for feicao in camadas["ucs"].get("features", []):
+            propriedades = feicao.setdefault("properties", {})
+            try:
+                propriedades["ha_total_fmt"] = f"{float(propriedades.get('ha_total')):,.0f}"
+            except (TypeError, ValueError):
+                propriedades["ha_total_fmt"] = "—"
+
+    n_ok = sum(v is not None for v in camadas.values())
+    print(f"[MAPA_WEB] camadas da turma: {n_ok}/3 carregadas")
+    return camadas
