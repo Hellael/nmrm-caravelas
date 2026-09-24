@@ -283,12 +283,20 @@ Ajustes vindos da apresentação ao grupo:
   base 1995–2014. São **globais**; os valores locais de Caravelas devem sair
   do NASA/IPCC AR6 Sea Level Projection Tool.
 - **Amarração vertical ao datum da DHN ainda pendente.** O FABDEM usa datum
-  vertical EGM2008; a v1 roda no **nível médio**, sem offset de maré. Os
-  campos em `NIVEIS_MARE` estão em `0.00` com flag `PROVISORIO = True`.
-  A solicitação de constantes harmônicas e datums locais ao **BNDO/CHM**
-  (`chm.bndo@marinha.mil.br`) é caminho crítico e **ainda não foi feita**.
-  Nenhum valor de maré, datum ou projeção local é inventado — se o dado não
-  chegou, permanece `0.00` sinalizado.
+  vertical EGM2008; a diferença para a superfície média do mar real (MDT)
+  segue desconhecida, e `OFFSET_GEOIDE_NM_M` continua em `0.00`.
+- **Maré: TPXO9-atlas v5, não mais placeholder (22/09/2026).** Os campos de
+  `NIVEIS_MARE` (NM/PMQ/PM/PMS/HAT) deixaram de estar em `0.00` com flag
+  `PROVISORIO = True` — agora vêm do TPXO9-atlas v5 (OSU), extraído por
+  `07_mare_tpxo.py`. Continua sendo **modelo, não medição de marégrafo**
+  (`NIVEIS_MARE["MEDIDA"] = False`), com ponto AO LARGO da barra (célula de
+  ~3,7 km — não resolve o estuário) e **sem** resolver o item anterior (o
+  datum vertical do MDE é problema independente). A solicitação de
+  constantes harmônicas de **marégrafo** ao **BNDO/CHM**
+  (`chm.bndo@marinha.mil.br`) é caminho crítico e **ainda não foi feita** —
+  é a única fonte que tornaria `MEDIDA = True`. Nenhum valor de maré, datum
+  ou projeção local é inventado — se o dado não chegou, permanece `0.00`
+  sinalizado.
 - **Viés do FABDEM sobre manguezal.** O FABDEM remove dossel e edificações
   por machine learning, mas em manguezal denso o resíduo de altura de árvore
   ainda pode superar o próprio sinal de NMRM simulado. Não substituir por

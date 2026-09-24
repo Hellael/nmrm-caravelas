@@ -101,7 +101,8 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
 | **IPCC AR6** | Cenários SSP | Valores de `CENARIOS_AR6` vêm da **Tabela 9.9 do AR6 WGI Cap. 9** (Fox-Kemper et al. 2021) — NMGM, mediana e faixa provável 17–83 %, base 1995–2014. **Nada foi calculado por nós.** SSP5-8.5 conferido contra o Sumário Executivo do Cap. 9 (set/2026): 0,23 [0,20–0,29] m em 2050 e 0,77 [0,63–1,01] m em 2100. SSP1-2.6, SSP2-4.5 e SSP5-8.5 LC ainda **não conferidos linha a linha**. São **globais (NMGM)**: substituir pelos locais do NASA/IPCC AR6 Sea Level Projection Tool (Garner et al., Zenodo 10.5281/zenodo.5914709). Ver `core.FONTE_CENARIOS`. |
 | **GEBCO 2025** | Batimetria de contexto | — |
 | **MapBiomas Col. 11 (2025)** | Cobertura do solo | `brazil_coverage-col11_2025.tif` (nacional, 728 MB, uint8, EPSG:4326). Recortado por `04_prepara_cobertura.py`, reamostragem **nearest** (categórico), alinhado pixel a pixel à grade do MDE. Legenda (código, nome, cor) transcrita do CSV oficial da Coleção 11 e conferida em set/2026 para os **17 códigos presentes** no recorte — os demais não foram transcritos e a interface os mostra como "fora da legenda conferida". Na v1.3 a camada é **apenas visual**. |
-| **BNDO/CHM · FEMAR** | Constantes harmônicas e datums de maré | `chm.bndo@marinha.mil.br`. **Ainda não solicitado.** Caminho crítico. |
+| **TPXO9-atlas v5 (OSU)** | Datums de maré (`core.NIVEIS_MARE`) | Extraído em 22/09/2026 por `07_mare_tpxo.py` (roda fora deste repo; `dados_web/mare_caravelas_tpxo9v5.json` é o produto versionado). Grade 1/30°, ponto ao largo da barra (~3,7 km de célula, ~2,55 km do alvo original). 8 constituintes (Q1, O1, P1, K1, N2, M2, S2, K2) → NM/PMQ/PM/PMS/HAT (este último estimado — soma das amplitudes, limite superior). **Modelo, não medição** — `NIVEIS_MARE["MEDIDA"] = False`. Não resolve o estuário (regra 7); não mexe no datum vertical do MDE (regra 8). |
+| **BNDO/CHM · FEMAR** | Constantes harmônicas de MARÉGRAFO (substituiria o TPXO) | `chm.bndo@marinha.mil.br`. **Ainda não solicitado.** Caminho crítico — é a única fonte que tornaria `MEDIDA = True`. |
 | **Laudo biológico Cassurubá** | Validação da cobertura | Conferência qualitativa por setor em `docs/validacao_mapbiomas_laudo.md`. Convergiu em zonação, adjacência mangue–apicum e ausência de carcinicultura; **divergiu** na cota do manguezal (ver decisão do viés de dossel). |
 | **Andrade et al. 2003** | Evolução quaternária da planície | Paleoníveis +4,8 / +3,5 / +2,5 m — validação opcional. |
 
@@ -122,14 +123,32 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
 - **Conectividade hidráulica LIGADA por padrão.** Terreno abaixo da cota mas
   sem caminho até o mar é classificado à parte (`isolada`), nunca somado à
   área inundada. É o principal diferencial frente aos simuladores online.
-- **Maré: adiada para a v2.** Offsets em `NIVEIS_MARE` estão em `0.00` com
-  `PROVISORIO = True`. A v1 roda no nível médio.
+- **Maré: TPXO9-atlas v5 substitui os offsets provisórios (22/09/2026).**
+  `NIVEIS_MARE` passou de `PROVISORIO = True` (tudo em 0,00 m) para os cinco
+  níveis extraídos do TPXO9-atlas v5 (OSU) por `07_mare_tpxo.py` — script
+  versionado como proveniência, mas que RODA FORA deste repo, contra o atlas
+  de ~10 GB; aqui só entra `dados_web/mare_caravelas_tpxo9v5.json`:
+  NM (0,000), PMQ (0,456), PM (0,913), PMS (1,244), HAT estimado (1,676 m —
+  soma das 8 amplitudes lidas: Q1, O1, P1, K1, N2, M2, S2, K2. É um LIMITE
+  SUPERIOR, não o HAT real — ignora modulação nodal e não inclui M4, MS4, MF,
+  MM). PMQ (preamar de quadratura) é nível novo: entra porque a disciplina
+  precisa do contraste sizígia x quadratura para ler exposição.
+  Continua sendo **modelo, não medição** — a flag virou `MEDIDA = False`
+  (a lógica inverteu: antes a tarja aparecia com `PROVISORIO = True`, agora
+  aparece com `MEDIDA = False`), e a tarja na interface é PERMANENTE
+  enquanto isso for verdade. Duas ressalvas que valem enquanto a fonte for
+  TPXO, não BNDO/CHM — ver regras 7 e 8 do CLAUDE.md: (1) célula de ~3,7 km,
+  ponto AO LARGO da barra, não resolve o estuário; (2) isto NÃO mexe no
+  datum vertical do MDE, que é problema independente. O pedido ao BNDO/CHM
+  por constantes de marégrafo de verdade segue em aberto.
 - **O "nível médio" não é calculado, é herdado (v1.2 documentou isso).**
   O corte é feito em z = 0 m no datum do próprio FABDEM (geoide EGM2008),
   ou seja, assume-se `NM local ≈ geoide` com `OFFSET_GEOIDE_NM_M = 0.00`.
   A diferença real é a topografia dinâmica média (MDT), decimétrica no
   Atlântico Sul tropical — mesma ordem do NMRM de 2050. Nenhuma constante
-  harmônica foi usada até aqui.
+  harmônica foi usada PARA ESTE OFFSET até aqui — as constantes do TPXO
+  (22/09/2026, ver decisão acima) resolvem os datums de MARÉ, não este.
+  `OFFSET_GEOIDE_NM_M` segue 0,00 e é problema independente (regra 8).
 - **`NMRM_MODO` força o modo (v1.2).** `web` ignora os dados completos e roda
   em `dados_web/` mesmo com o MDE local presente — é como pré-visualizar a
   ferramenta pública na própria máquina. A interface mostra tarja enquanto
@@ -150,10 +169,12 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
   e `positron` exigem API key e as tiles voltam carimbadas com
   "API KEY REQUIRED". Tentado e revertido na v1.2. O mapa fica com Esri World
   Imagery + OpenStreetMap.
-- **Modo web trava a maré em NM (v1.2).** Na ferramenta pública o seletor de
-  datum aparece com PM/PMS/HAT visíveis porém desabilitados, com o aviso
-  "Demais níveis de maré em desenvolvimento". No modo local segue editável,
-  para testar assim que o BNDO/CHM responder.
+- **Modo web NÃO trava mais a maré em NM (superada em 22/09/2026).** A trava
+  da v1.2 existia só porque PM/PMS/HAT eram placeholder em 0,00 m — travar
+  era melhor que oferecer um offset inventado. Essa razão não existe mais
+  (ver decisão de maré acima): o seletor de datum tem efeito real nos dois
+  modos agora. A tarja de aviso continua, permanente enquanto
+  `MEDIDA = False`, só que por outro motivo (modelo, não marégrafo).
 - **Fundo cartográfico padrão = relevo sombreado (v1.2).** O hipsométrico
   vira opção secundária: em Caravelas ele gasta a faixa de cor toda nos
   primeiros metros e compete com a lâmina d'água.
@@ -227,7 +248,10 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
       `04_prepara_cobertura.py` e `src/cobertura.py`; validação contra o laudo
       do Cassurubá documentada.
 - [ ] Imagem de satélite de fundo (`contextily`, reprojeção para WebMercator).
-- [ ] Solicitação ao BNDO e integração da maré.
+- [ ] Solicitação ao BNDO e integração da maré com constante de marégrafo.
+      Passo intermediário dado em 22/09/2026: `NIVEIS_MARE` passou a vir do
+      TPXO9-atlas v5 (modelo, não medição — ver §5 e regras 7-8) enquanto o
+      BNDO/CHM não responde.
 - [ ] Tratar o viés de dossel sobre manguezal (ver regra 6) — bloqueia a Parte 2.
 - [ ] Limites vetoriais da RESEX Cassurubá para trocar as faixas de latitude por setores reais.
 - [ ] Parte 2 — resposta ecológica cruzando com MapBiomas.
@@ -235,8 +259,12 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
 ## 7. Regras de conduta científica (não negociáveis)
 
 1. **Nunca inventar valor de maré, datum ou projeção local.** Se o dado não
-   chegou, manter `0.00` com flag `PROVISORIO` e avisar na interface.
-   Número inventado em mapa vira citação em relatório.
+   chegou, manter `0.00` com um flag explícito e avisar na interface — nunca
+   um número sem procedência. Os datums de maré passaram de placeholder
+   (`PROVISORIO`) para o TPXO9-atlas v5 em 22/09/2026 (ver §5); o datum
+   vertical do MDE (`OFFSET_GEOIDE_NM_M`) segue `0.00` pelo mesmo motivo
+   original — o dado real (CMEMS/DTU ou nivelamento a marégrafo) ainda não
+   chegou. Número inventado em mapa vira citação em relatório.
 2. **Não trocar o FABDEM por SRTM, Terrarium ou tiles Terrain-RGB genéricos.**
    Em planície com manguezal o viés de dossel é maior que o próprio sinal
    de NMRM simulado.
@@ -253,3 +281,15 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
    projetado para 2100. O manguezal sai artificialmente seguro. O apicum, sem
    dossel, é o controle interno e responde como esperado (56 % abaixo de +2 m).
    Detalhes em `docs/validacao_mapbiomas_laudo.md` §4.4.
+7. **A maré do TPXO não resolve o estuário (22/09/2026).** Os datums de
+   `NIVEIS_MARE` valem AO LARGO da barra — célula de ~3,7 km do
+   TPXO9-atlas v5 (OSU). Amplificação e defasagem de maré DENTRO dos canais
+   do estuário Caravelas–Peruípe não estão representadas. Isto é o mesmo
+   limite já declarado na regra 5 ("não resolve... atenuação de maré no
+   estuário"), agora com número: a célula do modelo, não só a ausência de
+   hidrodinâmica.
+8. **A troca de maré NÃO resolve o datum vertical (22/09/2026).**
+   EGM2008 x nível médio local segue em aberto; `OFFSET_GEOIDE_NM_M` segue
+   `0.00`. São dois problemas independentes — maré (regra 7) e datum
+   vertical do MDE (este) — e ninguém deve ler o primeiro como resolvido por
+   causa do segundo.

@@ -93,21 +93,41 @@ tropical ela é de ordem decimétrica, ou seja, **da mesma ordem do NMRM
 projetado para 2050**. Fechar esse offset depende de CMEMS/DTU ou de
 nivelamento geodésico amarrado ao marégrafo.
 
-### Por que a maré está zerada
+### De onde vem a maré (atualizado em 22/09/2026)
 
-Nenhuma constante harmônica foi usada. Os datums PM (preamar média), PMS
-(sizígia) e HAT (maior maré astronômica) estão em `0,00 m`, marcados como
-`PROVISORIO`, à espera dos dados do **BNDO/CHM** ou do catálogo FEMAR.
+Até 22/09/2026 nenhuma constante harmônica tinha sido usada: PM, PMS e HAT
+viviam em `0,00 m`, marcados `PROVISORIO`, à espera do **BNDO/CHM** ou do
+catálogo FEMAR. Isso mudou — os cinco datums de `NIVEIS_MARE` (NM, PMQ, PM,
+PMS, HAT) agora vêm do **TPXO9-atlas v5** (OSU), extraídos por
+`07_mare_tpxo.py` a partir de 8 constituintes harmônicos num ponto ao largo
+da barra de Caravelas. PMQ (preamar de quadratura) é nível novo, incluído
+para a turma comparar sizígia x quadratura.
 
-Isso segue a regra de conduta nº 1 do projeto: **nunca inventar valor de maré,
-datum ou projeção local.** Um número inventado num mapa vira citação em
-relatório. Por isso, na versão pública, o seletor de maré aparece travado em
-"Nível médio" com os demais níveis visíveis mas desabilitados — o usuário vê
-que existem e que estão em desenvolvimento.
+Isso NÃO é a mesma coisa que uma constante de **marégrafo**. TPXO é um
+modelo global assimilado a altimetria de satélite e a marégrafos — não é
+uma medição em Caravelas — e a célula usada tem ~3,7 km, representando a
+condição **ao largo da barra**, não dentro dos canais do estuário
+Caravelas–Peruípe (amplificação e defasagem de maré no estuário não estão
+representadas). Por isso `NIVEIS_MARE["MEDIDA"] = False` continua exibindo
+tarja de aviso na interface — agora permanente, e por outro motivo.
 
-**Consequência prática para a apresentação:** os mapas mostram a planície
-*no nível médio*. Uma preamar de sizígia sobe a cota antes mesmo de qualquer
-mudança climática. O mapa atual é, nesse sentido, **conservador**.
+Isso segue a regra de conduta nº 1 do projeto: **nunca inventar valor de
+maré, datum ou projeção local.** Antes disso significava manter tudo em
+`0,00 m` sinalizado; agora significa usar um valor real, mas continuar
+sinalizando sua procedência (modelo, não medição) em vez de apresentá-lo
+como se fosse constante de marégrafo. A solicitação ao BNDO/CHM continua em
+aberto — é a única fonte que tornaria `MEDIDA = True`.
+
+**Consequência prática para a apresentação:** os mapas no datum NM continuam
+mostrando a planície no nível médio, como antes. Selecionar PMS agora soma
++1,244 m de verdade à cota — uma preamar de sizígia sobe a cota antes mesmo
+de qualquer mudança climática, e esse efeito passou a aparecer no mapa.
+
+**O que isto não resolve:** o datum VERTICAL do MDE. O FABDEM segue em
+EGM2008, e a diferença entre o geoide e a superfície média do mar real
+(topografia dinâmica média) segue desconhecida — `OFFSET_GEOIDE_NM_M`
+continua `0,00`. É um problema independente da maré (ver seção anterior);
+a troca do TPXO não o resolve.
 
 ---
 
