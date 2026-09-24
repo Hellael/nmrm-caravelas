@@ -9,7 +9,9 @@ import config
 import src.slr_core as core
 
 config.criar_estrutura()
-DEM_TESTE = config.DIR_PROCESSADO / "dem_teste_sintetico.tif"
+# Em saidas/, NUNCA em processado/: aquela pasta é do dado real que vira mapa,
+# e um MDE sintético ao lado do FABDEM recortado é convite a confundir os dois.
+DEM_TESTE = config.DIR_SAIDAS / "dem_teste_sintetico.tif"
 
 ny, nx, res = 500, 600, 30.0
 y, x = np.mgrid[0:ny, 0:nx]

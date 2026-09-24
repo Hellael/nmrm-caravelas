@@ -59,7 +59,7 @@ nmrm-caravelas/
 ├── 08_prepara_camadas_turma.py  # regenera ucs_turma.geojson a partir do CNUC bruto e compara
 ├── diagnostico_zeros.py       # [diagnóstico] os 0,0 m do FABDEM são todos oceano? (docs/diagnostico_zeros.md)
 ├── histograma_cauda_costeira.py  # [diagnóstico] histograma fino da cauda inferior de cota
-├── teste_sintetico.py         # valida o pipeline sem precisar do FABDEM
+├── teste_sintetico.py         # valida o pipeline sem FABDEM; grava o MDE sintético em saidas/, NUNCA em processado/
 ├── docs/
 │   ├── logica_da_ferramenta.md        # como a ferramenta raciocina, ponta a ponta
 │   ├── diagnostico_zeros.md           # investigação dos 0,0 m suspeitos no FABDEM
