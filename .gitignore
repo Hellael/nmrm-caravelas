@@ -1,6 +1,10 @@
 # Dados NÃO vão para o Git.
 # FABDEM é CC BY-NC-SA 4.0 — redistribuir tiles no repositório viola a licença.
 dados/
+# saidas/ acumula arquivos com carimbo de data (nome_AAAAMMDD.ext) e nao e
+# limpa por nenhum script: reexecutar um script em outro dia gera copia nova,
+# muitas vezes byte a byte igual a anterior. Precisa de faxina periodica
+# (conferir md5sum antes de apagar; manter a data mais antiga do par).
 saidas/
 
 .venv/
