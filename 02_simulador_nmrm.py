@@ -94,6 +94,16 @@ CONFIG_UI = {
 # modo Livre dá para ligar as camadas da turma à mão. A aba "📚 Turma" some
 # inteira no modo Livre (`mostrar_aba_turma`), porque ela é conteúdo de
 # disciplina, não da ferramenta pública.
+#
+# v1.5 — entra `recorte_padrao`, a chave que responde "qual área este uso
+# analisa": no modo Turma, a área de estudo que a turma desenhou
+# (`limite_turma.geojson`); no modo Livre, o domínio inteiro do MDE, como
+# sempre foi. E entra `ucs_ligadas`, separada de `camadas_turma_ligadas`:
+# as UCs abrem DESLIGADAS nos dois modos (pedido de 24/09). Motivo: desde que
+# o recorte existe, o limite da área de estudo já é a linha que importa, e as
+# três UCs preenchidas por cima disputam a leitura da lâmina d'água bem no
+# estuário, que é onde a inundação acontece. Continuam a um clique.
+# Todas essas chaves definem o padrão do controle, não o trancam.
 # -----------------------------------------------------------------------------
 CONFIG_MODOS = {
     "turma": {
@@ -101,12 +111,16 @@ CONFIG_MODOS = {
         "modo_cenario_padrao": "Níveis da turma",
         "camadas_turma_ligadas": True,
         "mostrar_aba_turma": True,
+        "recorte_padrao": True,
+        "ucs_ligadas": False,
     },
     "livre": {
         "rotulo": "Livre (público)",
         "modo_cenario_padrao": "Manual",
         "camadas_turma_ligadas": False,
         "mostrar_aba_turma": False,
+        "recorte_padrao": False,
+        "ucs_ligadas": False,
     },
 }
 
@@ -118,6 +132,9 @@ CONFIG_TURMA = {
     # dentro do BBOX_WGS84).
     "limiar_cobertura_minima": 0.01,
 }
+
+# Pasta dos dados leves versionados (GeoJSON da turma, etc.), em qualquer modo.
+_DIR_WEB = str(config.DIR_RAIZ / fonte.CONFIG_FONTE["subdir_web"])
 
 # Onde o ponto consultado no mapa fica guardado entre reruns do Streamlit.
 CHAVE_PONTO = "nmrm_ponto_consultado"
@@ -159,19 +176,24 @@ def _hillshade(caminho: str, exagero: int):
 
 
 @st.cache_data(show_spinner="Gerando a camada topográfica (FABDEM)...")
-def _overlay_topo(caminho: str):
+def _overlay_topo(caminho: str, usar_recorte: bool = False):
     """
-    Hipsométrico do PRÓPRIO FABDEM. Cacheado só pelo caminho do MDE: a
-    topografia não muda com cenário, maré nem conectividade.
+    Hipsométrico do PRÓPRIO FABDEM. Cacheado pelo caminho do MDE e pelo
+    recorte: a topografia não muda com cenário, maré nem conectividade, mas
+    muda com o modo de uso (no modo Turma ela para no limite da área de
+    estudo, como todo o resto do mapa).
     """
     d = _carregar(caminho)
-    return mapaweb.gerar_overlay_hipsometrico(d["dem"], d["transform"], d["crs"])
+    return mapaweb.gerar_overlay_hipsometrico(
+        d["dem"], d["transform"], d["crs"], recorte=_recorte_de(caminho, usar_recorte))
 
 
 @st.cache_data(show_spinner="Traçando as isolinhas (FABDEM)...")
-def _isolinhas(caminho: str):
+def _isolinhas(caminho: str, usar_recorte: bool = False):
     d = _carregar(caminho)
-    return mapaweb.gerar_isolinhas_geojson(d["dem"], d["transform"], d["crs"])
+    return mapaweb.gerar_isolinhas_geojson(
+        d["dem"], d["transform"], d["crs"],
+        recorte=_recorte_de(caminho, usar_recorte))
 
 
 @st.cache_resource(show_spinner="Lendo a cobertura MapBiomas...")
@@ -207,6 +229,28 @@ def _camadas_turma(dir_dados: str):
     return mapaweb.carregar_camadas_turma(dir_dados)
 
 
+@st.cache_resource(show_spinner="Rasterizando o limite da turma na grade do MDE...")
+def _recorte_mascara(caminho: str, dir_dados: str):
+    """
+    Máscara booleana do recorte do modo Turma (True = dentro), na grade do
+    MDE. Estática por dataset — cacheada só por caminho, nunca por cota.
+    `None` se `limite_turma.geojson` não carregou (o app segue sem recorte).
+
+    RECORTE É DE RELATO, NÃO DE CÁLCULO: a conectividade é resolvida no
+    domínio INTEIRO (flood-fill ou limiar pré-computado) e esta máscara só
+    entra depois, na contagem e no desenho. Ver `core.mascara_recorte`.
+    """
+    geo = (_camadas_turma(dir_dados) or {}).get("limite")
+    if geo is None:
+        return None
+    return core.mascara_recorte(geo, _carregar(caminho))
+
+
+def _recorte_de(caminho: str, usar: bool):
+    """Máscara do recorte se `usar`, senão None (modo Livre = domínio inteiro)."""
+    return _recorte_mascara(caminho, _DIR_WEB) if usar else None
+
+
 def _geometria_para_utm(geometria: dict, crs_origem: str = "EPSG:4674") -> dict:
     """
     Reprojeta um Polygon/MultiPolygon GeoJSON de `crs_origem` (EPSG:4674 nos
@@ -235,7 +279,7 @@ def _geometria_para_utm(geometria: dict, crs_origem: str = "EPSG:4674") -> dict:
 
 
 @st.cache_resource(show_spinner="Rasterizando as UCs na grade do MDE...")
-def _mascara_ucs(caminho: str, dir_dados_web: str) -> dict:
+def _mascara_ucs(caminho: str, dir_dados_web: str, usar_recorte: bool = False) -> dict:
     """
     Uma máscara booleana por UC, na MESMA grade do MDE — cacheada só por
     `caminho` (o raster) e `dir_dados_web` (os GeoJSON): a rasterização não
@@ -245,8 +289,13 @@ def _mascara_ucs(caminho: str, dir_dados_web: str) -> dict:
 
     Retorna {cd_cnuc: {"nome", "categoria", "esfera", "ha_total", "mask"}};
     dict vazio se `ucs_turma.geojson` não carregou.
+
+    `usar_recorte`: intersecta cada UC com o recorte da turma (as UCs cabem
+    dentro do limite — `09_limite_turma.py` confere —, então na prática é
+    no-op; fica explícito para a contagem nunca sair do recorte).
     """
     d = _carregar(caminho)
+    rec = _recorte_de(caminho, usar_recorte)
     geo_ucs = (_camadas_turma(dir_dados_web) or {}).get("ucs")
     resultado: dict = {}
     if geo_ucs is None:
@@ -259,6 +308,8 @@ def _mascara_ucs(caminho: str, dir_dados_web: str) -> dict:
             [(geom_utm, 1)], out_shape=d["dem"].shape, transform=d["transform"],
             fill=0, dtype="uint8", all_touched=False,
         ).astype(bool)
+        if rec is not None:
+            mask &= rec
         resultado[props["cd_cnuc"]] = {
             "nome": props["nome_uc"], "categoria": props["categoria"],
             "esfera": props["esfera"], "ha_total": float(props["ha_total"]),
@@ -268,7 +319,8 @@ def _mascara_ucs(caminho: str, dir_dados_web: str) -> dict:
 
 
 @st.cache_data(show_spinner="Calculando a cobertura das UCs pelo MDE...")
-def _cobertura_ucs(caminho: str, dir_dados_web: str) -> pd.DataFrame:
+def _cobertura_ucs(caminho: str, dir_dados_web: str,
+                   usar_recorte: bool = False) -> pd.DataFrame:
     """
     Item (b) da aba Turma: por UC, quanto da área OFICIAL (`ha_total`, CNUC)
     cai sobre terreno válido do MDE (`np.isfinite(dem)`) dentro do recorte.
@@ -277,7 +329,7 @@ def _cobertura_ucs(caminho: str, dir_dados_web: str) -> pd.DataFrame:
     um segundo número de área que poderia divergir dele.
     """
     d = _carregar(caminho)
-    ucs = _mascara_ucs(caminho, dir_dados_web)
+    ucs = _mascara_ucs(caminho, dir_dados_web, usar_recorte)
     a = d["area_pixel_m2"] / 1e6
     limiar = CONFIG_TURMA["limiar_cobertura_minima"]
 
@@ -303,7 +355,7 @@ def _cobertura_ucs(caminho: str, dir_dados_web: str) -> pd.DataFrame:
 @st.cache_data(show_spinner="Cruzando os níveis da turma com as UCs...")
 def _matriz_niveis_por_uc(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
                           mare_m: float, conectividade: bool, semear_bordas: bool,
-                          dir_dados_web: str) -> pd.DataFrame:
+                          dir_dados_web: str, usar_recorte: bool = False) -> pd.DataFrame:
     """
     Item (d) da aba Turma: os três níveis de `core.NIVEIS_TURMA`, cruzados
     com a rasterização das UCs. Reaproveita `_mascara_auto` — a MESMA função
@@ -314,7 +366,7 @@ def _matriz_niveis_por_uc(caminho: str, caminho_mascara_agua: str, caminho_limia
     ma = (_carregar_mascara_agua(caminho_mascara_agua)
           if os.path.exists(caminho_mascara_agua) else None)
     lm = _carregar_limiar(caminho_limiar) if caminho_limiar else None
-    ucs = _mascara_ucs(caminho, dir_dados_web)
+    ucs = _mascara_ucs(caminho, dir_dados_web, usar_recorte)
     a = d["area_pixel_m2"] / 1e6
 
     linhas = []
@@ -338,10 +390,29 @@ def _matriz_niveis_por_uc(caminho: str, caminho_mascara_agua: str, caminho_limia
 
 
 @st.cache_data(show_spinner="Gerando overlay de cobertura...")
-def _overlay_cobertura(caminho: str):
+def _overlay_cobertura(caminho: str, caminho_mde: str = None,
+                       usar_recorte: bool = False):
+    """
+    `caminho` é o recorte de cobertura; `caminho_mde` só entra para montar a
+    máscara do recorte, que vive na grade do MDE. O `04_prepara_cobertura.py`
+    alinha a cobertura pixel a pixel a essa grade — se um dia as formas
+    divergirem, o recorte é PULADO com aviso em vez de casar arrays errados.
+
+    Fora do recorte as classes viram nodata: some do desenho e também do
+    resumo e da legenda, que é o que se quer — classe de cobertura fora da
+    área de estudo não deveria aparecer em legenda nenhuma.
+    """
     d = _carregar_cobertura(caminho)
     if d is None:
         return None, None, []
+    rec = _recorte_de(caminho_mde, usar_recorte) if caminho_mde else None
+    if rec is not None:
+        if rec.shape != d["classes"].shape:
+            print(f"[COBERTURA] AVISO: grade da cobertura {d['classes'].shape} != "
+                  f"grade do MDE {rec.shape}; recorte NÃO aplicado nesta camada.")
+        else:
+            d = dict(d)   # cópia rasa: o cache de _carregar_cobertura é compartilhado
+            d["classes"] = np.where(rec, d["classes"], d["nodata"])
     uri, bounds = mapaweb.gerar_overlay_web(
         d["classes"], d["transform"], d["crs"], cob.cores_overlay(d))
     return uri, bounds, cob.legenda_para_interface(cob.resumo_classes(d))
@@ -350,7 +421,7 @@ def _overlay_cobertura(caminho: str):
 @st.cache_data(show_spinner="Gerando overlay do mapa interativo...")
 def _overlay_web(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
                  cota_m: float, conectividade: bool, semear_bordas: bool,
-                 area_min: float, cores: dict):
+                 area_min: float, cores: dict, usar_recorte: bool = False):
     """
     Recalcula a máscara de inundação (barato — ndimage.label numa grade de
     ~5M px no modo local, ou consulta O(n) ao raster de limiar no modo web)
@@ -365,7 +436,9 @@ def _overlay_web(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
         core, d, cota_m,
         conectividade=conectividade, semear_bordas=semear_bordas,
         area_minima_ha=area_min, mascara_agua=ma, limiar=lm)
-    classes = mapaweb.classificar_overlay(m, ma if ma is not None else d["mask_oceano"])
+    classes = mapaweb.classificar_overlay(
+        m, ma if ma is not None else d["mask_oceano"],
+        recorte=_recorte_de(caminho, usar_recorte))
     return mapaweb.gerar_overlay_web(classes, d["transform"], d["crs"], cores)
 
 
@@ -386,8 +459,9 @@ def _mascara_auto(d, ma, lm, cota_m, conectividade, semear_bordas):
 @st.cache_data(show_spinner="Rodando a curva de exposição...")
 def _curva(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
            mare_m: float, conectividade: bool, semear_bordas: bool, passo: float,
-           topo: float = None):
+           topo: float = None, usar_recorte: bool = False):
     d = _carregar(caminho)
+    rec = _recorte_de(caminho, usar_recorte)
     ma = (_carregar_mascara_agua(caminho_mascara_agua)
           if os.path.exists(caminho_mascara_agua) else None)
     lm = _carregar_limiar(caminho_limiar) if caminho_limiar else None
@@ -407,7 +481,7 @@ def _curva(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
     for nmrm in cotas:
         c = core.cota_limiar(float(nmrm), mare_m=mare_m)
         m = _mascara_auto(d, ma, lm, c["cota_m"], conectividade, semear_bordas)
-        e = core.estatisticas_area(m, d["dem"], d["area_pixel_m2"])
+        e = core.estatisticas_area(m, d["dem"], d["area_pixel_m2"], recorte=rec)
         reg.append({"NMRM (m)": round(float(nmrm), 2),
                     "Cota (m)": round(c["cota_m"], 2),
                     "Área inundada (km²)": e["area_inundada_km2"],
@@ -417,8 +491,10 @@ def _curva(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
 
 @st.cache_data(show_spinner="Rodando a matriz de cenários...")
 def _tabela(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
-            mare_m: float, conectividade: bool, semear_bordas: bool):
+            mare_m: float, conectividade: bool, semear_bordas: bool,
+            usar_recorte: bool = False):
     d = _carregar(caminho)
+    rec = _recorte_de(caminho, usar_recorte)
     ma = (_carregar_mascara_agua(caminho_mascara_agua)
           if os.path.exists(caminho_mascara_agua) else None)
     lm = _carregar_limiar(caminho_limiar) if caminho_limiar else None
@@ -432,7 +508,7 @@ def _tabela(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
                 nmrm = core.CENARIOS_AR6[nome][ano][p]
                 c = core.cota_limiar(nmrm, mare_m=mare_m)
                 m = _mascara_auto(d, ma, lm, c["cota_m"], conectividade, semear_bordas)
-                e = core.estatisticas_area(m, d["dem"], d["area_pixel_m2"])
+                e = core.estatisticas_area(m, d["dem"], d["area_pixel_m2"], recorte=rec)
                 linhas.append({
                     "Cenário": nome, "Horizonte": str(ano), "Percentil": p,
                     "NMRM (m)": nmrm, "Cota total (m)": round(c["cota_m"], 2),
@@ -443,7 +519,7 @@ def _tabela(caminho: str, caminho_mascara_agua: str, caminho_limiar: str,
     for nivel in core.NIVEIS_TURMA:
         c = core.cota_limiar(nivel, mare_m=mare_m)
         m = _mascara_auto(d, ma, lm, c["cota_m"], conectividade, semear_bordas)
-        e = core.estatisticas_area(m, d["dem"], d["area_pixel_m2"])
+        e = core.estatisticas_area(m, d["dem"], d["area_pixel_m2"], recorte=rec)
         linhas.append({
             "Cenário": "Sensibilidade (turma)", "Horizonte": "—", "Percentil": "—",
             "NMRM (m)": nivel, "Cota total (m)": round(c["cota_m"], 2),
@@ -473,13 +549,33 @@ st.sidebar.subheader("0 · Modo de uso")
 _rotulo_por_chave_modo = {v["rotulo"]: k for k, v in CONFIG_MODOS.items()}
 _rotulo_modo_uso = st.sidebar.radio(
     "Este uso é...", list(_rotulo_por_chave_modo.keys()), index=0,
-    help="Turma: cenário parte de Níveis da turma e as camadas de contexto "
-         "(UCs, isóbatas, área de trabalho) já entram ligadas. Livre: cenário "
-         "parte de Manual e as camadas de contexto começam desligadas. Os "
-         "dois modos têm todos os mesmos controles — isto só muda o ponto "
-         "de partida.")
+    help="Turma: a análise é recortada à área que a turma delimitou (UCs + "
+         "isóbata de 500 m), o cenário parte de Níveis da turma e as camadas "
+         "de contexto (UCs, isóbatas, área de trabalho) já entram ligadas. "
+         "Livre: a análise cobre o domínio inteiro do MDE, o cenário parte de "
+         "Manual e as camadas de contexto começam desligadas. Os dois modos "
+         "têm todos os mesmos controles — isto só muda o ponto de partida.")
 modo_uso = _rotulo_por_chave_modo[_rotulo_modo_uso]
 CFG_MODO = CONFIG_MODOS[modo_uso]
+
+# Recorte à área da turma: o modo define o PADRÃO, não tranca nada (mesmo
+# princípio das outras chaves por modo). Sem `limite_turma.geojson` o controle
+# fica desabilitado e o app segue com o domínio inteiro — nunca exceção.
+_limite_ok = (_camadas_turma(_DIR_WEB) or {}).get("limite") is not None
+usar_recorte = st.sidebar.checkbox(
+    "Recortar à área da turma",
+    value=CFG_MODO["recorte_padrao"] and _limite_ok,
+    key=f"recorte_turma_{modo_uso}",
+    disabled=not _limite_ok,
+    help=("Conta e desenha só o que cai dentro da área de estudo que a turma "
+          "desenhou; o cálculo de conectividade segue no domínio inteiro do "
+          "MDE (o recorte é de relato). Os km² passam a ser a terra dessa "
+          "área coberta pelo MDE, sem a planície continental a oeste — é o "
+          "que tira a diluição da porcentagem pelo Grupo Barreiras."
+          if _limite_ok else
+          "`dados_web/limite_turma.geojson` não carregou — rode "
+          "`09_limite_turma.py`. O app segue sem recorte."))
+usar_recorte = bool(usar_recorte and _limite_ok)
 st.sidebar.divider()
 
 if FONTE.get("forcado"):
@@ -685,9 +781,17 @@ st.sidebar.subheader("2 · Empilhamento de maré")
 # 0,00 m (ver decisão datada em CLAUDE.md e o bloco de comentário em cima de
 # `core.NIVEIS_MARE`). A trava em NM do modo web (v1.2) só existia porque o
 # offset era inventado/zero — essa razão não existe mais, então o seletor
-# passa a valer nos dois modos, com efeito real na cota. A tarja de aviso
-# continua, só que agora por causa de `core.NIVEIS_MARE["MEDIDA"] = False`
-# (modelo, não marégrafo), não por causa de dado inventado.
+# passa a valer nos dois modos, com efeito real na cota.
+#
+# v1.5 (24/09/2026) — a tarja permanente que ficava aqui (`st.sidebar.warning`
+# disparada por `core.NIVEIS_MARE["MEDIDA"] = False`) foi REMOVIDA a pedido.
+# O que ela dizia não se perdeu e não é opcional (regra 3 do projeto): a
+# procedência completa — TPXO é modelo e não marégrafo, célula de ~3,7 km ao
+# largo da barra, não resolve o estuário — está declarada na aba **Metadados**,
+# que cita `core.NIVEIS_MARE["FONTE"]` e a `ressalva` gravada no próprio JSON.
+# Quem mexer aqui: se um dia a procedência sair da aba Metadados, ela precisa
+# voltar para cá. `MEDIDA` segue `False` — o que mudou foi onde se avisa, não
+# o que o dado é.
 chaves_mare = [k for k in core.NIVEIS_MARE if k not in ("MEDIDA", "FONTE")]
 
 chave_mare = st.sidebar.selectbox(
@@ -695,14 +799,6 @@ chave_mare = st.sidebar.selectbox(
     format_func=lambda k: core.NIVEIS_MARE[k]["rotulo"])
 
 _dados_mare = _mare_tpxo(str(config.DIR_RAIZ / "dados_web" / config.ARQ_MARE_TPXO))
-
-if not core.NIVEIS_MARE["MEDIDA"]:
-    _ressalva_mare = ((_dados_mare or {}).get("ressalva")
-                      or "modelo global de maré, não medição de marégrafo")
-    st.sidebar.warning(
-        f"**Maré de modelo global, não medição** ({core.NIVEIS_MARE['FONTE']}). "
-        f"{_ressalva_mare[0].upper()}{_ressalva_mare[1:]}.",
-        icon="⚠️")
 
 if _dados_mare:
     _niv_mare = _dados_mare["niveis_m"]
@@ -848,21 +944,23 @@ else:
 # desligado no modo Livre — `key` por modo pelo mesmo motivo da seção 1.
 st.sidebar.caption("**Contexto da turma**")
 _padrao_camadas_turma = CFG_MODO["camadas_turma_ligadas"]
-ver_area_turma = st.sidebar.checkbox(
-    "Área de trabalho da turma", value=_padrao_camadas_turma,
-    key=f"turma_area_{modo_uso}",
-    help="UCs da região + plataforma até a isóbata de 500 m — o domínio que "
-         "a turma definiu, não o domínio do MDE (o FABDEM não cobre a "
-         "plataforma). Fonte: ver aba Metadados.")
+ver_limite_turma = st.sidebar.checkbox(
+    "Limite da área da turma", value=_padrao_camadas_turma,
+    key=f"turma_limite_{modo_uso}",
+    help="A área de estudo que a turma desenhou no QGIS sobre a batimetria "
+         "e as unidades de conservação. É esta linha que define o recorte "
+         "quando ele está ligado.")
 ver_isobatas_turma = st.sidebar.checkbox(
     "Isóbatas (20–500 m)", value=_padrao_camadas_turma,
     key=f"turma_isobatas_{modo_uso}",
     help="Batimetria do Brasil CPRM/ANP 2013, derivada do GEBCO 925 m.")
 ver_ucs_turma = st.sidebar.checkbox(
-    "Unidades de conservação", value=_padrao_camadas_turma,
+    "Unidades de conservação", value=CFG_MODO["ucs_ligadas"],
     key=f"turma_ucs_{modo_uso}",
     help="APA Ponta da Baleia/Abrolhos, RESEX Cassurubá e Parque Nacional "
-         "Marinho dos Abrolhos. Fonte: CNUC 07/2026 (ICMBio/MMA).")
+         "Marinho dos Abrolhos. Fonte: CNUC 07/2026 (ICMBio/MMA). Vem "
+         "desligada por padrão: o preenchimento das três disputa a leitura da "
+         "lâmina d'água justamente no estuário.")
 
 opac_topo = st.sidebar.slider("Opacidade da topografia", 0.1, 1.0,
                               CONFIG_UI["opacidade_topo"], 0.05,
@@ -879,6 +977,25 @@ largura_figura = st.sidebar.slider(
     help="A figura da aba Mapa é quase quadrada. Reduzir a largura é o que "
          "faz a altura caber na tela.")
 
+# Enquadramento da figura — só faz sentido com recorte ligado (sem ele a
+# figura sempre mostra o domínio inteiro do MDE). NÃO muda número nenhum:
+# escolhe o que entra no quadro, não o que entra na conta.
+_ENQUADRAMENTOS = {
+    "Área de estudo inteira": "area_estudo",
+    "Só a planície (onde há MDE)": "planicie",
+}
+_rotulo_enq = st.sidebar.radio(
+    "Enquadramento da figura", list(_ENQUADRAMENTOS.keys()),
+    index=1, disabled=not usar_recorte, key=f"enquadramento_{modo_uso}",
+    help=("Área de estudo inteira: mostra o polígono da turma até a isóbata "
+          "de 500 m — honesto quanto ao tamanho da área, mas a planície fica "
+          "com ~8% da largura e a mancha de inundação vira um risco. Só a "
+          "planície: enquadra a parte que tem FABDEM, que é onde a exposição "
+          "acontece. Os km² são os mesmos nos dois." if usar_recorte else
+          "Disponível com o recorte ligado — sem ele a figura sempre mostra "
+          "o domínio inteiro do MDE."))
+enquadramento_fig = _ENQUADRAMENTOS[_rotulo_enq]
+
 
 # =============================================================================
 # PROCESSAMENTO
@@ -889,7 +1006,11 @@ mascaras = fonte.mascara_inundacao_auto(
     conectividade=conectividade, semear_bordas=semear_bordas,
     area_minima_ha=area_min, mascara_agua=mascara_agua, limiar=limiar)
 
-est = core.estatisticas_area(mascaras, dados["dem"], dados["area_pixel_m2"])
+# Recorte SÓ depois da conectividade (`mascaras` acima foi resolvida no domínio
+# inteiro): recortar antes cortaria caminhos de água que entram pela borda.
+recorte = _recorte_de(caminho, usar_recorte)
+est = core.estatisticas_area(mascaras, dados["dem"], dados["area_pixel_m2"],
+                             recorte=recorte)
 hs = _hillshade(caminho, exagero)
 
 # Tarja da guarda de saturação do limiar (defesa em profundidade — o clamp
@@ -919,13 +1040,25 @@ st.caption(f"{rotulo_cen} · datum {core.NIVEIS_MARE[chave_mare]['rotulo']} · "
            f"cota total **{cota['cota_m']:.2f} m** sobre o {core.CONFIG_DEM['datum_vertical']}")
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Área emersa atual", f"{est['area_terra_km2']:,.1f} km²")
+c1.metric("Área emersa atual" + (" (recorte)" if usar_recorte else ""),
+          f"{est['area_terra_km2']:,.1f} km²")
 c2.metric("Área inundada", f"{est['area_inundada_km2']:,.1f} km²",
           f"{est['pct_inundada']:.1f}% da área emersa")
 c3.metric("Área remanescente", f"{est['area_remanescente_km2']:,.1f} km²")
 c4.metric("Depressões sem conexão", f"{est['area_isolada_km2']:,.1f} km²",
           help="Terreno abaixo da cota que NÃO tem caminho hidráulico até o mar. "
                "Os simuladores online contam isto como inundação.")
+
+if usar_recorte:
+    _terra_dom = float(np.isfinite(dados["dem"]).sum()) * dados["area_pixel_m2"] / 1e6
+    st.caption(
+        f"**Recorte ligado — área de estudo da turma.** Os km² acima são a TERRA "
+        f"dessa área que o MDE cobre: {est['area_terra_km2']:,.1f} de {_terra_dom:,.1f} km² de terra no "
+        f"domínio. Não são a extensão do polígono, que é quase toda plataforma "
+        f"continental e não tem FABDEM. Fica de fora a planície continental a oeste "
+        f"— terreno alto do Grupo Barreiras, onde a inundação não chega, e que no "
+        f"modo Livre dilui a porcentagem. A conectividade com o mar foi resolvida no "
+        f"domínio inteiro; só a contagem e o desenho são recortados.")
 
 # v1.3 — o MAPA INTERATIVO passa a ser a aba principal. Motivo: a leitura que
 # a disciplina pede é "onde", e "onde" só fecha com base cartográfica real
@@ -979,6 +1112,16 @@ with aba_mapa_web:
         if not ponto:
             return None
         lat, lon = float(ponto[0]), float(ponto[1])
+
+        # Com recorte ligado, um clique FORA da área de estudo não devolve
+        # cota nem classe: aquele pixel não entra em conta nenhuma, e mostrar
+        # "3,4 m, acima da cota" ali convida a ler como resultado da análise.
+        # O ponto continua marcado no mapa, só que dizendo o que é.
+        if recorte is not None:
+            dentro = mapaweb.valor_no_ponto(recorte.astype("uint8"),
+                                            dados["transform"], dados["crs"], lat, lon)
+            if not dentro:
+                return {"lat": lat, "lon": lon, "fora_do_recorte": True}
 
         z = mapaweb.valor_no_ponto(dados["dem"], dados["transform"],
                                    dados["crs"], lat, lon)
@@ -1057,6 +1200,16 @@ with aba_mapa_web:
                     f'white-space:nowrap;">{rotulo}</td>'
                     f'<td style="padding:2px 0;"><b>{bolinha}{valor}</b></td></tr>')
 
+        if l.get("fora_do_recorte"):
+            return (f'<div style="font-family:system-ui,sans-serif;font-size:12.5px;'
+                    f'line-height:1.4;min-width:230px;">'
+                    f'<div style="font-weight:600;margin-bottom:4px;">'
+                    f'{l["lat"]:.5f}\u00b0, {l["lon"]:.5f}\u00b0</div>'
+                    f'<div style="padding:5px 6px;background:#EEF1F4;'
+                    f'border-left:3px solid #8A97A3;font-size:11.5px;color:#33404B;'
+                    f'line-height:1.35;">Fora da área de estudo da turma. Este ponto '
+                    f'não entra em nenhuma conta desta análise.</div></div>')
+
         linhas = [
             _linha(f"Cota ({core.CONFIG_DEM['datum_vertical']})", l["cota_txt"]),
             _linha("Faixa", l["faixa_txt"], l["faixa_cor"]),
@@ -1094,17 +1247,22 @@ with aba_mapa_web:
         t0 = time.perf_counter()
         png_uri, bounds_web = _overlay_web(
             caminho, caminho_mascara_agua, caminho_limiar, cota["cota_m"],
-            conectividade, semear_bordas, area_min, cores_overlay)
+            conectividade, semear_bordas, area_min, cores_overlay, usar_recorte)
         t_overlay_ms = (time.perf_counter() - t0) * 1000
 
     # O enquadramento vem sempre do MDE, não da camada ligada no momento:
     # assim ligar/desligar camada não faz o mapa pular de lugar.
-    uri_topo, bounds_topo = _overlay_topo(caminho)
+    uri_topo, bounds_topo = _overlay_topo(caminho, usar_recorte)
     centro_lat = (bounds_topo[0][0] + bounds_topo[1][0]) / 2
     centro_lon = (bounds_topo[0][1] + bounds_topo[1][1]) / 2
 
     mapa_web = folium.Map(location=[centro_lat, centro_lon], zoom_start=11,
                           tiles=None, control_scale=True)
+    if usar_recorte:
+        # Reenquadra no bbox do recorte em vez do centro do MDE.
+        _bounds_rec = mapaweb.bounds_recorte(recorte, dados["transform"], dados["crs"])
+        if _bounds_rec:
+            mapa_web.fit_bounds(_bounds_rec)
 
     folium.TileLayer(
         tiles=("https://server.arcgisonline.com/ArcGIS/rest/services/"
@@ -1140,7 +1298,8 @@ with aba_mapa_web:
         ).add_to(mapa_web)
 
     if ver_cobertura and dados_cob is not None:
-        uri_cob, bounds_cob, legenda_cob = _overlay_cobertura(caminho_cobertura)
+        uri_cob, bounds_cob, legenda_cob = _overlay_cobertura(
+            caminho_cobertura, caminho, usar_recorte)
         if uri_cob:
             folium.raster_layers.ImageOverlay(
                 image=uri_cob, bounds=bounds_cob, opacity=opac_cob,
@@ -1160,7 +1319,7 @@ with aba_mapa_web:
         ).add_to(mapa_web)
 
     if ver_isolinhas:
-        geo_isolinhas = _isolinhas(caminho)
+        geo_isolinhas = _isolinhas(caminho, usar_recorte)
 
         def _estilo_isolinha(feicao):
             destaque = feicao["properties"]["destaque"]
@@ -1183,26 +1342,10 @@ with aba_mapa_web:
     # adicionado ao mapa: os três FeatureGroup nascem com `show=` ligado ao
     # checkbox da barra lateral, mas ficam registrados no LayerControl do
     # Leaflet, que o usuário também pode ligar/desligar direto no mapa sem
-    # disparar um rerun do Streamlit. Ordem de desenho: área da turma
-    # (preenchimento suave por baixo) -> isóbatas -> UCs (por cima).
-    _dir_dados_web = str(config.DIR_RAIZ / fonte.CONFIG_FONTE["subdir_web"])
+    # disparar um rerun do Streamlit. Ordem de desenho: isóbatas -> UCs ->
+    # limite da área de estudo (por cima de tudo).
+    _dir_dados_web = _DIR_WEB
     camadas_turma = _camadas_turma(_dir_dados_web)
-
-    if camadas_turma["area_turma"] is not None:
-        _cfg_at = mapaweb.CONFIG_CAMADAS_TURMA["area_turma"]
-        fg_area_turma = folium.FeatureGroup(
-            name="Área de trabalho da turma", show=ver_area_turma)
-        folium.GeoJson(
-            camadas_turma["area_turma"],
-            style_function=lambda _f, _c=_cfg_at: {
-                "fillColor": _c["cor_preenchimento"], "fillOpacity": _c["alpha_preenchimento"],
-                "color": _c["cor_borda"], "weight": _c["espessura_borda"],
-            },
-            tooltip=folium.GeoJsonTooltip(
-                fields=["nome", "area_km2_fmt"],
-                aliases=["Área:", "Extensão (km²):"], sticky=True),
-        ).add_to(fg_area_turma)
-        fg_area_turma.add_to(mapa_web)
 
     if camadas_turma["isobatas"] is not None:
         _cfg_iso = mapaweb.CONFIG_CAMADAS_TURMA["isobatas"]
@@ -1239,6 +1382,22 @@ with aba_mapa_web:
                 aliases=["Unidade:", "Categoria:", "Esfera:", "Área (ha):"], sticky=True),
         ).add_to(fg_ucs)
         fg_ucs.add_to(mapa_web)
+
+    if camadas_turma.get("limite") is not None:
+        _cfg_lim = mapaweb.CONFIG_CAMADAS_TURMA["limite"]
+        fg_limite = folium.FeatureGroup(
+            name="Limite da área da turma", show=ver_limite_turma)
+        folium.GeoJson(
+            camadas_turma["limite"],
+            style_function=lambda _f, _c=_cfg_lim: {
+                "color": _c["cor_borda"], "weight": _c["espessura_borda"],
+                "fillOpacity": _c["alpha_preenchimento"],
+            },
+            tooltip=folium.GeoJsonTooltip(
+                fields=["nome", "area_km2_fmt"],
+                aliases=["Limite:", "Extensão (km²):"], sticky=True),
+        ).add_to(fg_limite)
+        fg_limite.add_to(mapa_web)   # por último: fica por cima das demais
 
     # ---- Ponto consultado ----------------------------------------------------
     # v1.3.1 — a leitura do clique passa a sair EM CIMA do ponto, num popup, e não
@@ -1289,7 +1448,17 @@ with aba_mapa_web:
             st.rerun()
 
     # ---- Leitura pontual (mesma informação do popup, em métricas) ------------
-    if leitura:
+    if leitura and leitura.get("fora_do_recorte"):
+        st.info(
+            f"Ponto **{leitura['lat']:.5f}, {leitura['lon']:.5f}** está fora da área "
+            "de estudo da turma. Não há leitura a mostrar: esse pixel não entra na "
+            "contagem de área, nem no mapa, nem na figura. Desligue **Recortar à "
+            "área da turma** (seção 0) ou passe para o modo Livre para consultar o "
+            "domínio inteiro do MDE.", icon="📍")
+        if st.button("Limpar ponto consultado"):
+            st.session_state.pop(CHAVE_PONTO, None)
+            st.rerun()
+    elif leitura:
         p1, p2, p3, p4 = st.columns(4)
         p1.metric("Ponto consultado", f"{leitura['lat']:.5f}, {leitura['lon']:.5f}")
         p2.metric(f"Cota FABDEM ({core.CONFIG_DEM['datum_vertical']})",
@@ -1376,9 +1545,11 @@ with aba_mapa:
                                hs=hs, tema=tema_figura,
                                figsize=CONFIG_UI["figsize"],
                                camadas_turma=camadas_turma,
-                               ver_area_turma=ver_area_turma,
                                ver_isobatas_turma=ver_isobatas_turma,
-                               ver_ucs_turma=ver_ucs_turma)
+                               ver_ucs_turma=ver_ucs_turma,
+                               ver_limite_turma=ver_limite_turma,
+                               recorte=recorte,
+                               enquadramento=enquadramento_fig)
 
     # v1.3 — a figura é quase quadrada (o recorte tem 65,8 x 69,8 km). Em
     # `width="stretch"` numa tela ampla ela ocupava a largura toda e a altura
@@ -1406,7 +1577,8 @@ with aba_mapa:
 
     if col_b.button("💾 Gravar GeoTIFF classificado", width="stretch"):
         saida = str(config.DIR_SAIDAS / f"inundacao_{cota['cota_m']:.2f}m.tif")
-        core.exportar_geotiff(mascaras, dados, saida, cota["cota_m"])
+        core.exportar_geotiff(mascaras, dados, saida, cota["cota_m"],
+                              recorte=recorte)
         st.success(f"Salvo em `{saida}` — pronto para o QGIS e para o "
                    "cruzamento com MapBiomas na Parte 2.")
     plt.close(fig)
@@ -1419,9 +1591,10 @@ with aba_mapa:
 if aba_turma is not None:
     with aba_turma:
         st.markdown(
-            f"A **área de trabalho da turma** soma **{config.AREA_TURMA_KM2:,.0f} km²** "
-            "— as três unidades de conservação da região mais a plataforma "
-            "continental até a isóbata de 500 m (fontes na aba Metadados). "
+            "A **área de estudo da turma** (camada `limite_turma`, a que o recorte "
+            "usa) foi desenhada no QGIS sobre a batimetria e as unidades de "
+            "conservação — o shapefile de origem é versionado no repositório "
+            "(fontes e detalhes na aba Metadados). "
             "**Ela não é o domínio do MDE**: o FABDEM não distribui tile "
             "oceânico (não há dado sobre a plataforma nem sobre o banco dos "
             "Abrolhos), então a simulação de exposição só roda dentro do "
@@ -1431,7 +1604,7 @@ if aba_turma is not None:
             "abaixo.")
 
         st.subheader("Unidades de conservação")
-        df_cob_ucs = _cobertura_ucs(caminho, _dir_dados_web)
+        df_cob_ucs = _cobertura_ucs(caminho, _dir_dados_web, usar_recorte)
         if df_cob_ucs.empty:
             st.caption("Camada de UCs indisponível — confira "
                        "`dados_web/ucs_turma.geojson`.")
@@ -1455,7 +1628,7 @@ if aba_turma is not None:
         if _ucs_com_terra.empty:
             st.caption("Nenhuma UC tem terra dentro do recorte do MDE.")
         else:
-            _mascaras_uc = _mascara_ucs(caminho, _dir_dados_web)
+            _mascaras_uc = _mascara_ucs(caminho, _dir_dados_web, usar_recorte)
             _a_px = dados["area_pixel_m2"] / 1e6
             linhas_exp = []
             for _, linha in _ucs_com_terra.iterrows():
@@ -1478,7 +1651,7 @@ if aba_turma is not None:
         st.subheader("Matriz dos níveis da turma, por UC")
         df_matriz_uc = _matriz_niveis_por_uc(
             caminho, caminho_mascara_agua, caminho_limiar, mare,
-            conectividade, semear_bordas, _dir_dados_web)
+            conectividade, semear_bordas, _dir_dados_web, usar_recorte)
         if df_matriz_uc.empty:
             st.caption("Nenhuma UC com terra no recorte — nada para cruzar.")
         else:
@@ -1523,13 +1696,16 @@ with aba_curva:
     _topo_curva = float(nmrm) if nmrm > CONFIG_UI["nmrm_max"] else None
     df_curva = _curva(caminho, caminho_mascara_agua, caminho_limiar, mare,
                       conectividade, semear_bordas, CONFIG_UI["curva_passo"],
-                      topo=_topo_curva)
+                      topo=_topo_curva, usar_recorte=usar_recorte)
     if nmrm > CONFIG_UI["nmrm_max"]:
         st.caption(
             f"Eixo estendido até +{nmrm:.2f} m para acompanhar o modo Manual. "
             f"Acima de +{CONFIG_UI['nmrm_max']:.1f} m o passo é de "
             f"{CONFIG_UI['curva_passo_extra']:.2f} m.")
 
+    if usar_recorte:
+        st.caption("Recorte ligado: a curva conta só a interseção entre a área "
+                   "da turma e o domínio do MDE.")
     fig2, ax2 = plt.subplots(figsize=(9, 4.5), constrained_layout=True)
     fig2.patch.set_facecolor(_pal["fundo_figura"])
     ax2.set_facecolor(_pal["fundo_figura"])
@@ -1561,7 +1737,10 @@ with aba_tabela:
     st.markdown("Matriz cenário × horizonte × percentil, mais os níveis de "
                 "sensibilidade definidos pela turma.")
     df_tab = _tabela(caminho, caminho_mascara_agua, caminho_limiar, mare,
-                     conectividade, semear_bordas)
+                     conectividade, semear_bordas, usar_recorte)
+    if usar_recorte:
+        st.caption("Recorte ligado: km² e % referem-se à interseção entre a área "
+                   "da turma e o domínio do MDE (ver legenda sob as métricas).")
     st.dataframe(df_tab, width="stretch", hide_index=True)
     st.download_button("⬇️ Baixar tabela (CSV)",
                        df_tab.to_csv(index=False).encode("utf-8-sig"),
@@ -1663,13 +1842,34 @@ with aba_meta:
         "necessário para o navegador, e o motivo de a isolinha ser guia de "
         "leitura, não medida. O número que vale é o do clique, que lê o pixel.")
 
+    st.subheader("Recorte à área da turma")
+    st.markdown(
+        "Com **Recortar à área da turma** ligado (padrão do modo Turma), a "
+        "contagem de área, a figura, o mapa interativo e o GeoTIFF exportado "
+        "só consideram o que cai dentro de `limite_turma.geojson`. **O recorte "
+        "é de relato, não de cálculo:** a conectividade hidráulica é "
+        "resolvida antes, no domínio inteiro do MDE — recortar antes cortaria "
+        "caminhos de água que entram pela borda e inventaria depressões "
+        "\"isoladas\" que não são. O limite é a **área de estudo que a turma "
+        "desenhou no QGIS**, a partir da batimetria (isóbata de 500 m) e das "
+        "unidades de conservação: o shapefile de origem é versionado em "
+        "`dados_web/fonte_limite_turma/` e `09_limite_turma.py` só o converte "
+        "para GeoJSON, sem derivar nem simplificar nada. Duas consequências "
+        "assumidas: (1) fica de fora a planície continental a oeste — terreno "
+        "alto do Grupo Barreiras, que o modo Livre conta e que dilui a "
+        "porcentagem de área inundada; (2) os km² são a TERRA da área de estudo "
+        "coberta pelo MDE, não a extensão do polígono, cuja maior parte é "
+        "plataforma continental sem FABDEM.")
+
     st.subheader("Procedência das camadas de contexto da turma")
     st.markdown(
-        "As três camadas vetoriais de contexto (área de trabalho da turma, "
-        "isóbatas e unidades de conservação — seção 5 da barra lateral e "
-        f"aba 📚 Turma, quando visível) somam **{config.AREA_TURMA_KM2:,.0f} km²** "
-        "e não são produto deste projeto: são só desenhadas, nunca geradas "
-        "ou alteradas aqui.\n\n"
+        "As camadas vetoriais de contexto (isóbatas e unidades de conservação — "
+        "seção 5 da barra lateral e aba 📚 Turma, quando visível) não são produto "
+        "deste projeto: são só desenhadas, nunca geradas ou alteradas aqui. "
+        "Já a camada `limite_turma` é a área de estudo desenhada pela turma no "
+        "QGIS: o shapefile está versionado em `dados_web/fonte_limite_turma/` e "
+        "`09_limite_turma.py` apenas o converte, declarando na propriedade "
+        "`area_km2_aprox_esferica` uma aferição de área.\n\n"
         "- **Unidades de conservação:** CNUC 07/2026 (ICMBio/MMA) — Cadastro "
         "Nacional de Unidades de Conservação.\n"
         "- **Isóbatas e área de trabalho:** Batimetria do Brasil CPRM/ANP "

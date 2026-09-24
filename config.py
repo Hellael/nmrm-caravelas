@@ -107,24 +107,49 @@ RESOLUCAO_M = 30.0
 # =============================================================================
 
 # A área que a turma definiu (UCs da região + plataforma até a isóbata de
-# 500 m) tem 21.955 km² e é quase toda oceânica. Ela NÃO é o domínio do MDE:
-# o FABDEM não distribui os tiles oceânicos (S18W038, S19W039, S19W038) e não
-# teria o que dizer sobre o banco dos Abrolhos. Por isso a área da turma vive
-# como camada vetorial, desenhada por cima do mapa, e BBOX_WGS84 segue sendo
-# o domínio de análise de exposição.
+# 500 m) tem 21.955 km² e é quase toda oceânica. Ela NÃO é — e nunca será —
+# o domínio do MDE: o FABDEM não distribui os tiles oceânicos (S18W038,
+# S19W039, S19W038) e não teria o que dizer sobre o banco dos Abrolhos. Por
+# isso BBOX_WGS84 segue sendo o domínio de LEITURA do raster nos dois modos
+# de uso, e a área da turma continua sendo camada vetorial.
+#
+# v1.5 (24/09/2026) — o que mudou: no modo de uso Turma a área da turma passou
+# a valer como RECORTE DE RELATO, mas pela geometria de ARQ_LIMITE_TURMA (ver
+# abaixo), não por esta. A conectividade hidráulica continua resolvida no
+# domínio inteiro (recortar antes do flood-fill cortaria caminhos de água que
+# entram pela borda); o polígono entra DEPOIS, na contagem de km², no desenho e
+# no GeoTIFF exportado. Consequência assumida: os km² do modo Turma são a TERRA
+# da área de estudo coberta pelo MDE (450,5 km²) — não a extensão do polígono,
+# cuja maior parte é plataforma sem FABDEM. O modo Livre segue contando o
+# domínio inteiro, como sempre.
 #
 # Fontes: CNUC 07/2026 (ICMBio/MMA) — unidades de conservação; Batimetria do
-# Brasil CPRM/ANP 2013, derivada do GEBCO 925 m — isóbatas.
+# Brasil CPRM/ANP 2013, derivada do GEBCO 925 m — isóbatas. As duas entram só
+# como contexto desenhado; a área de estudo em si é ARQ_LIMITE_TURMA, abaixo.
 BBOX_TURMA = {"lon_min": -39.60, "lon_max": -37.24,
               "lat_min": -18.26, "lat_max": -17.23}
 ARQ_UCS_TURMA      = "ucs_turma.geojson"
 ARQ_ISOBATAS_TURMA = "isobatas_turma.geojson"
-ARQ_AREA_TURMA     = "area_turma.geojson"
 
-# area_turma.geojson não traz a área como propriedade (só o nome). Valor
-# documentado acima, usado pela interface para não recalcular geodésia de um
-# polígono pequeno só para um tooltip.
-AREA_TURMA_KM2 = 21955.0
+# A ÁREA DE ESTUDO DA TURMA, desenhada à mão no QGIS sobre a batimetria
+# (isóbata de 500 m) e as unidades de conservação. É ao mesmo tempo a camada
+# desenhada e a geometria que o recorte do modo Turma rasteriza sobre a grade
+# do MDE. `09_limite_turma.py` só converte o shapefile para GeoJSON — não
+# deriva, não simplifica e não recalcula nada.
+#
+# O shapefile de origem é VERSIONADO em `dados_web/fonte_limite_turma/`
+# (~45 KB): é trabalho manual e insubstituível, então não fica em
+# NMRM_DIR_DADOS como o CNUC bruto do `08`. Para mudar a área: redesenhar no
+# QGIS, substituir o shapefile e rodar o `09` — nunca editar o GeoJSON à mão.
+#
+# Em 24/09/2026 este polígono SUBSTITUIU a antiga camada `area_turma.geojson`
+# (21.955 km², contorno provisório que fechava a oeste numa reta vertical em
+# -39,59° e engolia 97,5 % da terra do domínio). Aquela camada, a constante
+# ARQ_AREA_TURMA e AREA_TURMA_KM2 foram removidas do projeto — quem precisar
+# do arquivo antigo pega no histórico do git. Esta aqui é a única área de
+# estudo da turma; a extensão vai na propriedade `area_km2_aprox_esferica` do
+# próprio GeoJSON, não numa constante que pode divergir do arquivo.
+ARQ_LIMITE_TURMA   = "limite_turma.geojson"
 
 
 # =============================================================================
