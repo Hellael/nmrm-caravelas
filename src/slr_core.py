@@ -25,6 +25,10 @@ import rasterio
 import matplotlib
 from matplotlib import cm, colors
 from matplotlib.colors import LightSource
+from matplotlib.lines import Line2D
+from matplotlib.path import Path as _MplPath
+from matplotlib.patches import PathPatch
+from rasterio.warp import transform as _warp_transform
 from scipy import ndimage
 
 # =============================================================================
@@ -50,7 +54,8 @@ CONFIG_DEM = {
 #   variação estérica regional. Devem ser SUBSTITUÍDOS pelos valores
 #   locais de Caravelas extraídos do NASA/IPCC AR6 Sea Level Projection Tool
 #   (Garner et al., Zenodo 10.5281/zenodo.5914709), grid point mais próximo.
-#   Enquanto isso, `PROVISORIO = True` faz a interface exibir aviso.
+#   Enquanto isso, a interface avisa via `FONTE_CENARIOS` (logo abaixo) que
+#   o valor é NMGM, não NMRM.
 # -----------------------------------------------------------------------------
 CENARIOS_AR6 = {
     "SSP1-2.6": {
@@ -112,38 +117,68 @@ FONTE_CENARIOS = {
 NIVEIS_TURMA = [0.5, 1.0, 2.0]
 
 # -----------------------------------------------------------------------------
-# Datums de maré em Caravelas — PLACEHOLDERS.
-# Preencher com as constantes harmônicas do BNDO/CHM ou, provisoriamente,
-# com o Catálogo de Estações Maregráficas Brasileiras (FEMAR), estação Caravelas.
-# Enquanto `PROVISORIO` for True, a interface exibe tarja de aviso e os
-# offsets ficam em 0.0 (ou seja, a simulação roda no nível médio).
+# Datums de maré em Caravelas — TPXO9-atlas v5 (OSU), extraídos em 22/09/2026
+# por `07_mare_tpxo.py` (roda fora deste repo, contra o atlas de ~10 GB; só o
+# JSON de saída — `dados_web/mare_caravelas_tpxo9v5.json` — é versionado
+# aqui, como proveniência auditável). A tabela deixou de ser PLACEHOLDER
+# (0.00 com `PROVISORIO = True`) para ser MODELO: `MEDIDA = False` continua
+# acionando a tarja de aviso na interface, só que por outro motivo agora —
+# ver `FONTE` abaixo e a ressalva gravada no JSON.
+#
+# Três coisas deliberadas nesta tabela, registradas aqui e não só no pedido
+# que gerou a troca:
+#   - PMQ (preamar de quadratura) é nível NOVO. Entra porque a disciplina
+#     precisa do contraste sizígia x quadratura para ler exposição — não é
+#     preenchimento de tabela.
+#   - O rótulo do HAT diz "(estimada)" porque 1,676 m é a SOMA das 8
+#     amplitudes lidas (Q1, O1, P1, K1, N2, M2, S2, K2): é um LIMITE
+#     SUPERIOR, não o HAT real. Ignora a modulação nodal (ciclo de 18,6
+#     anos) e não inclui constituintes de água rasa (M4, MS4) nem de longo
+#     período (MF, MM). Nunca reportar como HAT sem esse qualificador.
+#   - `MEDIDA = False`: TPXO é reanálise/modelo global assimilado a
+#     altimetria e marégrafos — não é o marégrafo de Caravelas. A célula tem
+#     ~3,7 km e fica AO LARGO da barra; não resolve amplificação nem
+#     defasagem dentro dos canais do estuário (ver `dist_do_alvo_km` e
+#     `ressalva` no JSON).
 # -----------------------------------------------------------------------------
 NIVEIS_MARE = {
-    "PROVISORIO": True,
-    "NM":   {"rotulo": "Nível médio (NM)",                       "offset_m": 0.00},
-    "PM":   {"rotulo": "Preamar média (MHW)",                    "offset_m": 0.00},
-    "PMS":  {"rotulo": "Preamar de sizígia (MHWS)",              "offset_m": 0.00},
-    "HAT":  {"rotulo": "Maior maré astronômica (HAT)",           "offset_m": 0.00},
+    "MEDIDA": False,   # modelo global, não marégrafo — ver ressalvas acima
+    "FONTE": "TPXO9-atlas v5 (OSU), 1/30°, ponto ao largo da barra",
+    "NM":   {"rotulo": "Nível médio (NM)",                  "offset_m": 0.000},
+    "PMQ":  {"rotulo": "Preamar de quadratura",             "offset_m": 0.456},
+    "PM":   {"rotulo": "Preamar média (MHW)",               "offset_m": 0.913},
+    "PMS":  {"rotulo": "Preamar de sizígia (MHWS)",         "offset_m": 1.244},
+    "HAT":  {"rotulo": "Maior maré astronômica (estimada)", "offset_m": 1.676},
 }
 
 # -----------------------------------------------------------------------------
 # COMO O "NÍVEL MÉDIO" ENTRA NA CONTA — leia antes de citar o número no relatório.
 #
-# O nível médio NÃO foi calculado por este projeto. Ele é HERDADO do datum
-# vertical do próprio MDE: o FABDEM é referenciado ao geoide EGM2008, e a
-# simulação corta o terreno em z = 0 m nesse datum. Ou seja, a v1 assume
+# Dois problemas INDEPENDENTES. A troca de 22/09/2026 (PROVISORIO -> TPXO)
+# resolveu só o segundo — ninguém deve ler o primeiro como resolvido por
+# causa do segundo.
 #
-#       nível médio local  ==  geoide EGM2008        (OFFSET_GEOIDE_NM_M = 0)
+# (a) DATUM VERTICAL DO MDE — continua em aberto, continua 0.00.
+#     O nível médio NÃO foi calculado por este projeto. Ele é HERDADO do
+#     datum vertical do próprio MDE: o FABDEM é referenciado ao geoide
+#     EGM2008, e a simulação corta o terreno em z = 0 m nesse datum. Ou seja:
 #
-# Essa igualdade é uma APROXIMAÇÃO. A diferença real entre o geoide e a
-# superfície média do mar é a topografia dinâmica média (MDT), sustentada por
-# correntes, vento e gradientes de densidade. No Atlântico Sul tropical ela é
-# de ordem decimétrica — comparável ao próprio NMRM de 2050. Preencher com
-# CMEMS/DTU ou com nivelamento geodésico amarrado ao marégrafo.
+#         nível médio local  ==  geoide EGM2008        (OFFSET_GEOIDE_NM_M = 0)
 #
-# Consequência prática: a v1 roda "no nível médio" por CONSTRUÇÃO, não por
-# cálculo. Nenhuma constante harmônica foi usada. Os offsets de PM/PMS/HAT em
-# NIVEIS_MARE seguem em 0.00 com PROVISORIO = True justamente por isso.
+#     Essa igualdade é uma APROXIMAÇÃO. A diferença real entre o geoide e a
+#     superfície média do mar é a topografia dinâmica média (MDT), sustentada
+#     por correntes, vento e gradientes de densidade — de ordem decimétrica
+#     no Atlântico Sul tropical, comparável ao próprio NMRM de 2050. A maré
+#     do TPXO NÃO fecha esse buraco: ela é referenciada ao nível médio LOCAL
+#     do próprio modelo de maré, não ao geoide EGM2008. Preencher com
+#     CMEMS/DTU ou com nivelamento geodésico amarrado a marégrafo.
+#
+# (b) DATUMS DE MARÉ — esses sim deixaram de ser placeholder em 22/09/2026.
+#     Antes, PM/PMS/HAT viviam em 0.00 com `PROVISORIO = True` porque
+#     nenhuma constante harmônica tinha sido usada. Agora `NIVEIS_MARE` vem
+#     do TPXO9-atlas v5 (bloco acima) — real, mas ainda MODELO, não medição
+#     (`MEDIDA = False`), com as ressalvas de célula de ~3,7 km e ponto ao
+#     largo da barra.
 # -----------------------------------------------------------------------------
 OFFSET_GEOIDE_NM_M = 0.00
 
@@ -204,6 +239,41 @@ CONFIG_MAPA = {
     "cor_oceano":       "#0B3D5C",
     "alpha_agua":       0.62,
     "dpi_export":       300,
+}
+
+# -----------------------------------------------------------------------------
+# Camadas de contexto da turma (área de trabalho, isóbatas, UCs) na figura
+# estática. Mesmas cores de `mapa_web.CONFIG_CAMADAS_TURMA`, para o mapa
+# interativo e a figura de relatório contarem a mesma história — mas
+# declaradas de novo AQUI, não importadas de lá: o motor não importa módulo
+# de interface (regra 5 do projeto). Vetorial e externo ao projeto: nenhuma
+# destas três camadas é gerada aqui, só desenhada.
+CONFIG_CAMADAS_FIG = {
+    "area_turma": {
+        "cor_borda": "#2C7DA0",   # só contorno — ver nota em figura_mapa
+        "espessura": 1.6,
+        "zorder":    4,
+    },
+    "isobatas": {
+        "cores_por_profundidade_m": {
+            20:  "#BEE3F8",
+            50:  "#8FD0EF",
+            100: "#4FB6E0",
+            200: "#1D7FB8",
+            500: "#0B3D5C",
+        },
+        "cor_padrao":     "#4FB6E0",   # profundidade fora da lista acima
+        "espessura":      1.0,
+        "espessura_500m": 2.0,         # a mais funda se destaca das demais
+        "zorder":         5,
+    },
+    "ucs": {
+        "cor_borda":           "#1B7A3D",
+        "cor_preenchimento":   "#3FA85C",
+        "alpha_preenchimento": 0.18,
+        "espessura_borda":     1.3,
+        "zorder":              6,
+    },
 }
 
 
@@ -651,6 +721,197 @@ def _barra_escala(ax, transform, largura_px, comprimento_km=5):
             bbox=dict(fc="white", ec="none", alpha=0.75, pad=1.5))
 
 
+# -----------------------------------------------------------------------------
+# Camadas de contexto da turma na figura estática — auxiliares geométricas.
+#
+# `ax.imshow(rgb)` em `figura_mapa` é chamado SEM `extent`, então os eixos da
+# figura estão em coordenadas de PIXEL (x=coluna, y=linha, origem no canto
+# superior esquerdo), não em metros UTM. Os GeoJSON da turma vêm em
+# EPSG:4674 (SIRGAS 2000 geográfico). `_geo_para_pixel` faz as duas
+# conversões em sequência: reprojeta para a grade do MDE e aplica a inversa
+# do affine para cair em pixel.
+# -----------------------------------------------------------------------------
+
+def _geo_para_pixel(coords, transform, crs_origem: str = "EPSG:4674") -> list:
+    """
+    Converte [(lon, lat), ...] em [(col, lin), ...] no referencial de pixel
+    da figura.
+
+    Usa `rasterio.warp.transform` para a reprojeção (rasterio já é
+    dependência do projeto — nada de pyproj nem geopandas só para isto) e a
+    inversa do affine (`~transform`) para ir de metros UTM a pixel; o
+    operador aceita arrays numpy diretamente. NÃO usa
+    `rasterio.transform.rowcol`: ele arredonda para inteiro e serrilha a
+    linha da geometria — aqui o traço tem que ficar suave.
+
+    `crs_origem` é o CRS da geometria de entrada (EPSG:4674 nos três GeoJSON
+    da turma); o destino é sempre a grade do MDE (`CONFIG_DEM["epsg_projetado"]`).
+    """
+    coords = np.asarray(coords, dtype="float64")
+    if coords.shape[0] == 0:
+        return []
+    lons, lats = coords[:, 0], coords[:, 1]
+    xs, ys = _warp_transform(crs_origem, f"EPSG:{CONFIG_DEM['epsg_projetado']}",
+                             lons.tolist(), lats.tolist())
+    cols, lins = ~transform * (np.asarray(xs), np.asarray(ys))
+    return list(zip(cols.tolist(), lins.tolist()))
+
+
+def _dentro_do_quadro(pontos_px, xlim, ylim) -> bool:
+    """
+    True se a caixa envolvente dos pontos cruza o quadro atual dos eixos.
+    Usado para decidir se uma camada LIGADA ganha item de legenda — ligar o
+    toggle não implica a geometria realmente cruzar o recorte do MDE (ex.:
+    a isóbata de 50 m já está a leste da borda do recorte).
+
+    Teste por CAIXA ENVOLVENTE, não por vértice: a área de trabalho da
+    turma e as isóbatas vêm de geometria de baixa resolução (GEBCO 925 m),
+    com vértices espaçados por vários km — um segmento cruza o quadro do
+    raster sem que nenhum dos seus vértices caia dentro dele. Testar só
+    vértice perdia exatamente esse caso (a borda oeste da área da turma,
+    por exemplo, ficava sem item de legenda mesmo desenhada na figura).
+    """
+    if not pontos_px:
+        return False
+    cols, lins = np.asarray(pontos_px).T
+    xmin, xmax = sorted(xlim)
+    ymin, ymax = sorted(ylim)
+    return bool(cols.min() <= xmax and cols.max() >= xmin
+                and lins.min() <= ymax and lins.max() >= ymin)
+
+
+def _path_poligono(coordenadas, transform, crs_origem: str) -> _MplPath | None:
+    """
+    Monta um único `matplotlib.path.Path` a partir dos anéis de um Polygon
+    GeoJSON (`coordenadas[0]` é o anel externo, os demais são buracos).
+
+    Um Path só, com o anel externo e os buracos concatenados e cada anel
+    fechado por `CLOSEPOLY`, deixa o matplotlib recortar os buracos pela
+    regra do número de voltas (nonzero): o GeoJSON exige anel externo
+    anti-horário e buracos em sentido horário (RFC 7946), e é essa
+    orientação oposta que faz o preenchimento padrão do matplotlib deixar o
+    buraco vazio — sem isso uma UC com enclave apareceria pintada por cima
+    dele.
+    """
+    vertices, codigos = [], []
+    for anel in coordenadas:
+        pts = _geo_para_pixel(anel, transform, crs_origem)
+        if len(pts) < 4:   # anel GeoJSON fechado tem no mínimo 4 pontos (3 + repetição do 1º)
+            continue
+        vertices.extend(pts)
+        codigos.extend([_MplPath.MOVETO] + [_MplPath.LINETO] * (len(pts) - 2) + [_MplPath.CLOSEPOLY])
+    if not vertices:
+        return None
+    return _MplPath(vertices, codigos)
+
+
+def _path_geometria(geometria, transform, crs_origem: str) -> _MplPath | None:
+    """`_path_poligono` para Polygon OU MultiPolygon — um Path composto no
+    segundo caso, uma chamada de `ax.add_patch` cobre a feature inteira."""
+    tipo = geometria.get("type")
+    if tipo == "Polygon":
+        return _path_poligono(geometria["coordinates"], transform, crs_origem)
+    if tipo == "MultiPolygon":
+        sub = [_path_poligono(poly, transform, crs_origem) for poly in geometria["coordinates"]]
+        sub = [p for p in sub if p is not None]
+        return _MplPath.make_compound_path(*sub) if sub else None
+    return None
+
+
+def _linhas_geometria(geometria, transform, crs_origem: str) -> list:
+    """Pontos de pixel de um LineString OU MultiLineString, uma lista de
+    trechos (cada um plotável direto com `ax.plot`)."""
+    tipo = geometria.get("type")
+    if tipo == "LineString":
+        return [_geo_para_pixel(geometria["coordinates"], transform, crs_origem)]
+    if tipo == "MultiLineString":
+        return [_geo_para_pixel(trecho, transform, crs_origem) for trecho in geometria["coordinates"]]
+    return []
+
+
+def _desenhar_camadas_turma(ax, transform, camadas_turma: dict,
+                            ver_area_turma: bool, ver_isobatas_turma: bool,
+                            ver_ucs_turma: bool) -> list:
+    """
+    Desenha as três camadas de contexto da turma por cima da lâmina d'água,
+    em pixel (ver `_geo_para_pixel`). Ordem de zorder (`CONFIG_CAMADAS_FIG`):
+    área de trabalho (só contorno) -> isóbatas (linhas) -> UCs (contorno +
+    preenchimento translúcido).
+
+    `camadas_turma` é o MESMO dict que `mapa_web.carregar_camadas_turma`
+    devolve — passado por quem chama, porque o motor não lê arquivo de
+    interface (regra 5 do projeto).
+
+    Retorna a lista de itens de legenda (dict com "tipo" e "rotulo") só das
+    camadas que estavam LIGADAS *e* tiveram pelo menos um ponto dentro do
+    quadro atual — ligar o toggle não garante que a geometria cruze o
+    recorte do MDE (a isóbata de 50 m, por exemplo, fica a leste da borda).
+    """
+    camadas_turma = camadas_turma or {}
+    cfg = CONFIG_CAMADAS_FIG
+    xlim, ylim = ax.get_xlim(), ax.get_ylim()
+    itens_legenda = []
+
+    geo_area = camadas_turma.get("area_turma")
+    if ver_area_turma and geo_area is not None:
+        c = cfg["area_turma"]
+        visivel = False
+        for feicao in geo_area.get("features", []):
+            path = _path_geometria(feicao["geometry"], transform, "EPSG:4674")
+            if path is None:
+                continue
+            ax.add_patch(PathPatch(path, facecolor="none", edgecolor=c["cor_borda"],
+                                   linewidth=c["espessura"], zorder=c["zorder"]))
+            visivel = visivel or _dentro_do_quadro(path.vertices.tolist(), xlim, ylim)
+        if visivel:
+            itens_legenda.append({"tipo": "linha", "cor": c["cor_borda"],
+                                  "rotulo": "Área de trabalho da turma"})
+
+    geo_iso = camadas_turma.get("isobatas")
+    if ver_isobatas_turma and geo_iso is not None:
+        c = cfg["isobatas"]
+        visivel = False
+        for feicao in geo_iso.get("features", []):
+            prof = int(round(abs(feicao["properties"].get("prof", 0))))
+            cor = c["cores_por_profundidade_m"].get(prof, c["cor_padrao"])
+            peso = c["espessura_500m"] if prof == 500 else c["espessura"]
+            for trecho in _linhas_geometria(feicao["geometry"], transform, "EPSG:4674"):
+                if len(trecho) < 2:
+                    continue
+                cols, lins = zip(*trecho)
+                ax.plot(cols, lins, color=cor, lw=peso, zorder=c["zorder"])
+                visivel = visivel or _dentro_do_quadro(trecho, xlim, ylim)
+        if visivel:
+            itens_legenda.append({"tipo": "linha", "cor": c["cor_padrao"],
+                                  "rotulo": "Isóbatas (20–500 m)"})
+
+    geo_ucs = camadas_turma.get("ucs")
+    if ver_ucs_turma and geo_ucs is not None:
+        c = cfg["ucs"]
+        visivel = False
+        for feicao in geo_ucs.get("features", []):
+            path = _path_geometria(feicao["geometry"], transform, "EPSG:4674")
+            if path is None:
+                continue
+            ax.add_patch(PathPatch(path, facecolor=c["cor_preenchimento"],
+                                   alpha=c["alpha_preenchimento"], edgecolor=c["cor_borda"],
+                                   linewidth=c["espessura_borda"], zorder=c["zorder"]))
+            visivel = visivel or _dentro_do_quadro(path.vertices.tolist(), xlim, ylim)
+        if visivel:
+            itens_legenda.append({"tipo": "area", "cor_borda": c["cor_borda"],
+                                  "cor_preenchimento": c["cor_preenchimento"],
+                                  "alpha": c["alpha_preenchimento"],
+                                  "rotulo": "Unidades de conservação"})
+
+    # `add_patch`/`plot` podem alargar xlim/ylim automaticamente (autoscale) —
+    # restaura o quadro do raster, senão o estuário vira um ponto perdido no
+    # meio da plataforma continental.
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+
+    return itens_legenda
+
+
 def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
                 titulo: str = "Exposição ao NMRM — Caravelas (BA)",
                 subtitulo: str = "",
@@ -658,7 +919,11 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
                 fundo: str = "hipsometrico",
                 hs: np.ndarray = None,
                 tema: str = "claro",
-                figsize=(11, 9)):
+                figsize=(11, 9),
+                camadas_turma: dict = None,
+                ver_area_turma: bool = False,
+                ver_isobatas_turma: bool = False,
+                ver_ucs_turma: bool = False):
     """
     Monta a figura de relatório: hillshade + hipsometria + lâmina d'água,
     com legenda, barra de escala, seta norte e créditos de fonte.
@@ -667,6 +932,12 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
     `tema`:  "claro" | "escuro" — muda só o papel da figura (ver CONFIG_TEMA).
     `hs`: sombreamento pré-calculado (evita recomputar a cada movimento
           do slider na interface; use `hillshade()` uma única vez).
+
+    `camadas_turma`: o MESMO dict que `mapa_web.carregar_camadas_turma`
+    devolve ({"area_turma", "isobatas", "ucs"}), passado por quem chama — o
+    motor não lê arquivo de interface (regra 5 do projeto). Os três
+    `ver_*_turma` ligam cada camada, todos desligados por padrão; ver
+    `_desenhar_camadas_turma` para a lógica de desenho e de legenda.
 
     Retorna (fig, ax) — quem chamou decide se salva ou exibe.
     """
@@ -712,6 +983,15 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
                   cmap=colors.ListedColormap([CONFIG_MAPA["cor_isolado"]]),
                   alpha=CONFIG_MAPA["alpha_agua"], interpolation="nearest")
 
+    # Contexto da turma — DEPOIS da lâmina d'água, ANTES da barra de escala e
+    # da legenda (que ainda vai ganhar os itens destas camadas, se alguma
+    # tiver desenhado algo dentro do quadro). `_desenhar_camadas_turma` já
+    # restaura xlim/ylim no fim — o quadro aqui embaixo é o mesmo de antes.
+    itens_turma = _desenhar_camadas_turma(
+        ax, dados_dem["transform"], camadas_turma,
+        ver_area_turma, ver_isobatas_turma, ver_ucs_turma,
+    )
+
     ax.set_xticks([]); ax.set_yticks([])
     for s in ax.spines.values():
         s.set_linewidth(0.8)
@@ -736,6 +1016,16 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
         itens.append(Patch(fc=CONFIG_MAPA["cor_isolado"], alpha=CONFIG_MAPA["alpha_agua"],
                            label="Abaixo da cota, sem conexão hidráulica"))
     itens.append(Patch(fc=CONFIG_MAPA["cor_oceano"], label="Oceano atual (FABDEM)"))
+
+    # Itens de legenda das camadas da turma — só as que `_desenhar_camadas_turma`
+    # confirmou visíveis dentro do quadro (ligar o toggle não garante isso).
+    for item in itens_turma:
+        if item["tipo"] == "linha":
+            itens.append(Line2D([0], [0], color=item["cor"], lw=2, label=item["rotulo"]))
+        else:  # "area" — contorno + preenchimento, caso das UCs
+            itens.append(Patch(fc=item["cor_preenchimento"], alpha=item["alpha"],
+                               ec=item["cor_borda"], label=item["rotulo"]))
+
     ax.legend(handles=itens, loc="lower right", fontsize=8, framealpha=0.9)
 
     creditos = (f"MDE: FABDEM V1-2 (Hawker et al. 2022) · datum vertical {CONFIG_DEM['datum_vertical']} · "

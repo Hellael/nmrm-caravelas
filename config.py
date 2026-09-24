@@ -94,6 +94,42 @@ RESOLUCAO_M = 30.0
 
 
 # =============================================================================
+# ÁREA DE TRABALHO DA TURMA
+# =============================================================================
+
+# A área que a turma definiu (UCs da região + plataforma até a isóbata de
+# 500 m) tem 21.955 km² e é quase toda oceânica. Ela NÃO é o domínio do MDE:
+# o FABDEM não distribui os tiles oceânicos (S18W038, S19W039, S19W038) e não
+# teria o que dizer sobre o banco dos Abrolhos. Por isso a área da turma vive
+# como camada vetorial, desenhada por cima do mapa, e BBOX_WGS84 segue sendo
+# o domínio de análise de exposição.
+#
+# Fontes: CNUC 07/2026 (ICMBio/MMA) — unidades de conservação; Batimetria do
+# Brasil CPRM/ANP 2013, derivada do GEBCO 925 m — isóbatas.
+BBOX_TURMA = {"lon_min": -39.60, "lon_max": -37.24,
+              "lat_min": -18.26, "lat_max": -17.23}
+ARQ_UCS_TURMA      = "ucs_turma.geojson"
+ARQ_ISOBATAS_TURMA = "isobatas_turma.geojson"
+ARQ_AREA_TURMA     = "area_turma.geojson"
+
+# area_turma.geojson não traz a área como propriedade (só o nome). Valor
+# documentado acima, usado pela interface para não recalcular geodésia de um
+# polígono pequeno só para um tooltip.
+AREA_TURMA_KM2 = 21955.0
+
+
+# =============================================================================
+# MARÉ — TPXO9-atlas v5
+# =============================================================================
+
+# Produto de `07_mare_tpxo.py` (roda FORA deste repo, contra o atlas de
+# ~10 GB — aqui só o JSON de saída é versionado, como proveniência
+# auditável). Consumido por `src/slr_core.NIVEIS_MARE` (offsets já extraídos)
+# e pela interface (constituintes completos, para a aba Metadados).
+ARQ_MARE_TPXO = "mare_caravelas_tpxo9v5.json"
+
+
+# =============================================================================
 # FABDEM — onde baixar
 # =============================================================================
 
