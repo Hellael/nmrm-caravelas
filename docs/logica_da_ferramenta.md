@@ -206,6 +206,136 @@ Barreiras, terreno alto que jamais alagaria. **O número em km² é o que
 importa** para a planície; a porcentagem está diluída pela extensão do
 recorte.
 
+### O limite da turma é desenho, não derivação (v1.5)
+
+`limite_turma.geojson` **não é calculado por este projeto**. É a área de estudo
+que a turma desenhou no QGIS, sobre a batimetria (isóbata de 500 m) e os
+limites das unidades de conservação. `09_limite_turma.py` só converte o
+shapefile para GeoJSON, com conferências: para se o .prj for projetado,
+corrige anel auto-interceptante com `buffer(0)` e para se a correção mexer
+mais de 1 km² de área, descarta feição contida em outra e para em sobreposição
+parcial. O shapefile de origem é versionado em `dados_web/fonte_limite_turma/`,
+porque é trabalho manual e insubstituível — se sumir, a definição da área some
+junto. Para mudar a área: redesenhar no QGIS, substituir o shapefile e rodar o
+`09`. Nunca editar o GeoJSON à mão.
+
+Ele substituiu, em 24/09/2026, a camada `area_turma.geojson` (21.955 km²), um
+contorno provisório que fechava a oeste numa reta vertical em -39,59° — a borda
+oeste do domínio do MDE — e por isso continha 97,5 % da terra do domínio:
+recortar por ela não recortava nada de útil. Aquela camada foi REMOVIDA do
+projeto (arquivo, constantes e controle na interface); quem precisar dela pega
+no histórico do git. O limite desenhado acompanha o contorno das UCs, que segue
+a costa e entra no estuário: 18,5 % da terra, 450,5 km².
+
+### Recorte à área da turma: a ordem importa (v1.5)
+
+No modo de uso **Turma** a análise é recortada à área de estudo da turma. No
+modo **Livre** nada é recortado: vale o domínio inteiro do MDE, como em todas
+as versões anteriores. A ordem das operações é a parte que não pode ser
+trocada:
+
+1. **Conectividade** — resolvida no domínio INTEIRO do MDE (flood-fill no modo
+   local; `limiar_conexao_web.tif`, pré-computado sobre o domínio inteiro, no
+   modo web).
+2. **Recorte** — só depois, na hora de contar, de desenhar e de exportar.
+
+Se o MDE fosse recortado antes do passo 1, a água que entra pela borda do
+recorte deixaria de ter caminho até o mar e a ferramenta inventaria depressões
+"isoladas" que não são. Por isso o recorte é **de relato, não de cálculo**.
+
+Em números, medido em 24/09/2026 sobre `dados_web/` (o recorte leve que a
+ferramenta publicada lê, 30 m), com conectividade ligada e mancha mínima de
+1 ha:
+
+| cota | domínio inteiro (modo Livre) | dentro da área de estudo (modo Turma) | da inundação do domínio |
+|------|------------------------------|---------------------------------------|-------------------------|
+| terra | 2.440,9 km² | **450,5 km² (18,5 %)** | — |
+| +1,00 m | 5,01 km² (0,21 %) | 4,47 km² (**0,99 %**) | 89 % |
+| +2,00 m | 26,52 km² (1,09 %) | 23,02 km² (**5,11 %**) | 87 % |
+| +3,00 m | 118,77 km² (4,87 %) | 78,23 km² (**17,37 %**) | 66 % |
+
+O recorte fica com 18,5 % da terra e **captura 87–89 % da inundação** nas cotas
+que interessam. É esse o ganho: o que sai é o platô do Grupo Barreiras, terreno
+alto que não alaga em cenário nenhum e que só servia para diluir a
+porcentagem — o problema descrito duas seções acima. A +2,00 m a leitura passa
+de "1,1 % da área" para "5,1 % da área de estudo da turma", e as duas frases
+descrevem exatamente os mesmos 23 km² de terra alagada.
+
+A partir de +3,00 m a captura cai para 66 %: acima dessa cota a inundação começa
+a avançar para dentro da planície, fora da área de estudo. Vale lembrar que
++3,00 m já está fora da faixa do AR6 — ali o mapa é teste de sensibilidade do
+terreno, não cenário climático.
+
+### O recorte é duro: o de fora não é desenhado
+
+No modo Turma a ferramenta mostra **só o que está dentro da área de estudo** —
+na figura e no mapa interativo. Não há fantasma esmaecido do lado de fora: o
+terreno fora do polígono simplesmente não é desenhado
+(`CONFIG_MAPA["alpha_fora_recorte"] = 0,0`; um valor maior o traz de volta, e
+aí o item de legenda correspondente reaparece sozinho).
+
+Três detalhes que não são óbvios e que alguém vai querer "simplificar" um dia:
+
+- **O fundo do eixo deixa de ser o oceano.** Sem recorte, o fundo da figura É
+  `cor_oceano` e o raster inteiro é o mapa. Com recorte isso não pode: a
+  planície continental que fica de fora apareceria pintada de azul-oceano, e
+  terra alta lida como mar é o pior erro que este mapa poderia cometer. Então
+  o fundo vira o papel da figura e o oceano passa a ser uma camada desenhada
+  só DENTRO do recorte.
+- **A escala de cor do hipsométrico olha só para dentro.** O percentil 99,5
+  que define o topo da rampa é calculado sobre o terreno recortado. Caso
+  contrário o platô do Grupo Barreiras continuaria esticando a rampa de um
+  terreno que nem aparece no mapa.
+- **Nas isolinhas, a ordem das operações importa.** O NaN do recorte entra
+  DEPOIS do preenchimento de oceano e DEPOIS da suavização gaussiana. Antes do
+  preenchimento, a borda do corte viraria uma isolinha de 0,5 m falsa
+  acompanhando o recorte; antes da suavização, o gaussiano espalharia NaN por
+  toda a vizinhança do kernel e comeria isolinha boa lá dentro.
+
+No mapa interativo, além da exposição, passaram a ser recortadas a camada
+topográfica, as isolinhas e a cobertura MapBiomas — antes vinham do domínio
+inteiro e desenhavam relevo que não entra em conta nenhuma. E o clique fora do
+recorte não devolve cota, faixa nem classe: devolve "fora da área de estudo".
+Mostrar "3,4 m, acima da cota" num pixel que não entra em conta nenhuma
+convidaria a ler aquilo como resultado da análise.
+
+### O quadro da figura é o polígono, não a grade
+
+A figura é desenhada em coordenadas de PIXEL da grade do FABDEM — é o que
+permite `imshow` e geometria vetorial conviverem no mesmo eixo. Isso NÃO
+limita o quadro à grade: a conversão geo->pixel é uma afim e continua valendo
+fora dela, com coordenadas negativas ou maiores que a largura. Por isso o
+enquadramento vem do bbox do POLÍGONO da área de estudo
+(`_bbox_pixel_geojson`), não do bbox da máscara rasterizada, que seria
+recortada pela grade e devolveria o retângulo do MDE.
+
+Pelo mesmo motivo o mar dentro da área de estudo é desenhado como POLÍGONO
+(`_preencher_geojson`), não como imagem sobre a grade: uma imagem pararia na
+borda do raster e deixaria um retângulo azul de canto reto, com cara de dado.
+
+O quadro cobre de -39,49° a -37,24°, cerca de 240 km. Três consequências, todas
+tratadas: a figura é reproporcionada ao quadro mantendo a mesma área em
+polegadas (teto de aspecto 2,4); a barra de escala escolhe um valor redondo da
+série 1-2-5 proporcional à largura (50 km aqui, 10 km na planície); e a legenda
+sai para uma faixa abaixo do mapa, porque no canto ela cobria o traçado do
+limite.
+
+**A conta a pagar:** a planície de Caravelas ocupa cerca de 8 % da largura
+desse quadro. Mostrar a área de estudo como ela é — quase toda plataforma —
+custa a leitura fina da exposição. Por isso o enquadramento é escolha, não
+decisão fixa: a barra lateral oferece **Área de estudo inteira** e **Só a
+planície (onde há MDE)**, com padrão na segunda. **Enquadramento não é
+recorte** — os dois contam exatamente os mesmos km², e o que muda é só o que
+entra no quadro. Num relatório, as duas juntas contam a história inteira: a
+geral situa a área de trabalho, a de detalhe mostra onde a água chega.
+
+O rodapé declara o que os km² são. Nada disso mexe nos NÚMEROS: o recorte já
+valia na contagem desde a primeira versão.
+
+Os km² do modo Turma são a **terra** da área de estudo que o MDE cobre. Não são
+os ~16.255 km² de extensão do polígono: a maior parte dele é plataforma
+continental, onde o FABDEM não distribui tile e não há o que medir.
+
 ---
 
 ## 7. De onde vêm os cenários

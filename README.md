@@ -54,6 +54,7 @@ nmrm-caravelas/
 ├── 06_diagnostico_dossel.py   # [diagnóstico] viés de dossel sobre manguezal x "isolada"
 ├── 07_mare_tpxo.py            # proveniência da maré TPXO9 (roda fora deste repo)
 ├── 08_prepara_camadas_turma.py  # regenera ucs_turma.geojson a partir do CNUC bruto
+├── 09_limite_turma.py         # converte o shapefile da área de estudo -> limite_turma.geojson
 ├── diagnostico_zeros.py       # [diagnóstico] os 0,0 m do FABDEM são todos oceano?
 ├── histograma_cauda_costeira.py  # [diagnóstico] histograma fino da cauda inferior
 ├── teste_sintetico.py         # valida o pipeline sem FABDEM; grava o MDE sintético em saidas/, NUNCA em processado/
@@ -73,8 +74,9 @@ nmrm-caravelas/
 investigação**: só leem os dados, respondem uma pergunta específica e gravam
 relatório em `saidas/`. O app não os importa e nenhum produto de `dados_web/`
 depende deles; rodá-los ou não não muda nenhum número da ferramenta. O
-pipeline de produção é `01 → 03 → 04` (mais o `07` e o `08`, que geram
-proveniência de maré e das camadas da turma).
+pipeline de produção é `01 → 03 → 04` (mais o `07`, o `08` e o `09`, que geram
+proveniência de maré, das camadas da turma e o limite único que o modo Turma
+usa como recorte).
 
 ## Como instalar
 

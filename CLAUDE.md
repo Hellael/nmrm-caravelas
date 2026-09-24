@@ -57,6 +57,7 @@ nmrm-caravelas/
 ├── 06_diagnostico_dossel.py   # [diagnóstico] quanto do "isolada" vem do viés de dossel no mangue (somente leitura)
 ├── 07_mare_tpxo.py            # proveniência da maré TPXO9-atlas v5 (roda FORA deste repo)
 ├── 08_prepara_camadas_turma.py  # regenera ucs_turma.geojson a partir do CNUC bruto e compara
+├── 09_limite_turma.py         # converte o shapefile da área de estudo -> limite_turma.geojson
 ├── diagnostico_zeros.py       # [diagnóstico] os 0,0 m do FABDEM são todos oceano? (docs/diagnostico_zeros.md)
 ├── histograma_cauda_costeira.py  # [diagnóstico] histograma fino da cauda inferior de cota
 ├── teste_sintetico.py         # valida o pipeline sem FABDEM; grava o MDE sintético em saidas/, NUNCA em processado/
@@ -70,7 +71,8 @@ nmrm-caravelas/
 │   ├── mare_caravelas_tpxo9v5.json    # produto do 07 (constituintes e datums de maré)
 │   ├── ucs_turma.geojson      # 3 UCs da turma (CNUC 07/2026) — reproduzível pelo 08
 │   ├── isobatas_turma.geojson # isóbatas 20–500 m (CPRM/ANP 2013) — filtragem NÃO reprodutível
-│   ├── area_turma.geojson     # área de trabalho da turma, 21.955 km² — filtragem NÃO reprodutível
+│   ├── limite_turma.geojson   # área de estudo da turma (produto do 09) — camada E geometria do recorte
+│   └── fonte_limite_turma/    # shapefile de origem da área de estudo (QGIS) — VERSIONADO
 │   └── LICENSE.txt
 ├── dados/                     # SÓ existe se NMRM_DIR_DADOS não estiver definida (nesta máquina: vazia/ausente)
 └── saidas/                    # PNG, GeoTIFF, CSV com carimbo de data (NÃO versionar; faxina periódica)
@@ -119,7 +121,7 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
 | **GEBCO 2025** | Batimetria de contexto | — |
 | **MapBiomas Col. 11 (2025)** | Cobertura do solo | `brazil_coverage-col11_2025.tif` (nacional, 763 MB, uint8, EPSG:4326; em `DIR_AUXILIAR`, constante `config.ARQ_MAPBIOMAS_NACIONAL` — o `04` procura só ali). Recortado por `04_prepara_cobertura.py`, reamostragem **nearest** (categórico), alinhado pixel a pixel à grade do MDE. Legenda (código, nome, cor) transcrita do CSV oficial da Coleção 11 e conferida em set/2026 para os **17 códigos presentes** no recorte — os demais não foram transcritos e a interface os mostra como "fora da legenda conferida". Na v1.3 a camada é **apenas visual**. |
 | **TPXO9-atlas v5 (OSU)** | Datums de maré (`core.NIVEIS_MARE`) | Extraído em 22/09/2026 por `07_mare_tpxo.py` (roda fora deste repo; `dados_web/mare_caravelas_tpxo9v5.json` é o produto versionado). Grade 1/30°, ponto ao largo da barra (~3,7 km de célula, ~2,55 km do alvo original). 8 constituintes (Q1, O1, P1, K1, N2, M2, S2, K2) → NM/PMQ/PM/PMS/HAT (este último estimado — soma das amplitudes, limite superior). **Modelo, não medição** — `NIVEIS_MARE["MEDIDA"] = False`. Não resolve o estuário (regra 7); não mexe no datum vertical do MDE (regra 8). |
-| **Camadas da turma (vetoriais)** | Contexto desenhado sobre o mapa; **não entram em nenhuma conta** | `dados_web/ucs_turma.geojson` (3 UCs: APA Ponta da Baleia/Abrolhos, RESEX Cassurubá, PARNA Marinho dos Abrolhos — CNUC 07/2026, ICMBio/MMA): **reproduzível** por `08_prepara_camadas_turma.py` a partir de `ucs_regiao.geojson` (CNUC bruto, 42 UCs, em `DIR_AUXILIAR`); a regeneração bate com o versionado em feições, campos, vértices, coordenadas (dif. 0°) e área. A tolerância de simplificação (0,0008°, ~89 m) é **ajuste reverso, não a receita original**, e o CRS é só rotulado como EPSG:4674 (coordenadas em CRS84, sem transformar). `isobatas_turma.geojson` (Batimetria do Brasil CPRM/ANP 2013, derivada do GEBCO 925 m) e `area_turma.geojson` (área de trabalho da turma, 21.955 km²): origem declarada em `config.py`, **mas o passo de filtragem/derivação NÃO é reprodutível hoje** — a fonte bruta não está no repositório nem em `NMRM_DIR_DADOS`. **Atenção RESEX Cassurubá:** `ucs_turma.geojson` já contém o limite dela (item pendente do §6), mas a 249 vértices e ~89 m de tolerância (o original tem 2.482): serve para DESENHAR; para definir setor de análise, usar a geometria cheia de `ucs_regiao.geojson`. |
+| **Camadas da turma (vetoriais)** | Contexto desenhado sobre o mapa. Desde a v1.5, `limite_turma.geojson` também é a geometria do **recorte de relato** do modo Turma (contagem, desenho e GeoTIFF — nunca a conectividade); as demais seguem sem entrar em conta nenhuma | `dados_web/limite_turma.geojson` (~16.255 km², aferição esférica na propriedade `area_km2_aprox_esferica`): a **área de estudo que a turma desenhou no QGIS** sobre a batimetria (isóbata de 500 m) e as UCs. Um polígono, 2.771 vértices. O shapefile de origem é **versionado** em `dados_web/fonte_limite_turma/` (~45 KB) — é trabalho manual e insubstituível, então não fica em `NMRM_DIR_DADOS` como o CNUC bruto. `09_limite_turma.py` só CONVERTE: confere o .prj (para se for projetado), corrige anel auto-interceptante com `buffer(0)` e para se a correção mexer mais de 1 km², descarta feição contida em outra (o arquivo tem um rascunho de 84 km² dentro do polígono bom) e para em sobreposição parcial. Para mudar a área: redesenhar no QGIS, substituir o shapefile e rodar o `09` — nunca editar o GeoJSON à mão. Rótulo de CRS EPSG:4674 com coordenadas em CRS84 sem transformar, igual às camadas irmãs. Em 24/09/2026 SUBSTITUIU a camada `area_turma.geojson` (21.955 km², contorno provisório que fechava a oeste numa reta em -39,59° e engolia a planície continental inteira): o arquivo, `ARQ_AREA_TURMA`, `AREA_TURMA_KM2` e a camada na interface foram REMOVIDOS — quem precisar do antigo pega no histórico do git. `dados_web/ucs_turma.geojson` (3 UCs: APA Ponta da Baleia/Abrolhos, RESEX Cassurubá, PARNA Marinho dos Abrolhos — CNUC 07/2026, ICMBio/MMA): **reproduzível** por `08_prepara_camadas_turma.py` a partir de `ucs_regiao.geojson` (CNUC bruto, 42 UCs, em `DIR_AUXILIAR`); a regeneração bate com o versionado em feições, campos, vértices, coordenadas (dif. 0°) e área. A tolerância de simplificação (0,0008°, ~89 m) é **ajuste reverso, não a receita original**, e o CRS é só rotulado como EPSG:4674 (coordenadas em CRS84, sem transformar). `isobatas_turma.geojson` (Batimetria do Brasil CPRM/ANP 2013, derivada do GEBCO 925 m): origem declarada em `config.py`, **mas o passo de filtragem/derivação NÃO é reprodutível hoje** — a fonte bruta não está no repositório nem em `NMRM_DIR_DADOS`. **Atenção RESEX Cassurubá:** `ucs_turma.geojson` já contém o limite dela (item pendente do §6), mas a 249 vértices e ~89 m de tolerância (o original tem 2.482): serve para DESENHAR; para definir setor de análise, usar a geometria cheia de `ucs_regiao.geojson`. |
 | **BNDO/CHM · FEMAR** | Constantes harmônicas de MARÉGRAFO (substituiria o TPXO) | `chm.bndo@marinha.mil.br`. **Ainda não solicitado.** Caminho crítico — é a única fonte que tornaria `MEDIDA = True`. |
 | **Laudo biológico Cassurubá** | Validação da cobertura | Conferência qualitativa por setor em `docs/validacao_mapbiomas_laudo.md`. Convergiu em zonação, adjacência mangue–apicum e ausência de carcinicultura; **divergiu** na cota do manguezal (ver decisão do viés de dossel). |
 | **Andrade et al. 2003** | Evolução quaternária da planície | Paleoníveis +4,8 / +3,5 / +2,5 m — validação opcional. |
@@ -152,9 +154,10 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
   MM). PMQ (preamar de quadratura) é nível novo: entra porque a disciplina
   precisa do contraste sizígia x quadratura para ler exposição.
   Continua sendo **modelo, não medição** — a flag virou `MEDIDA = False`
-  (a lógica inverteu: antes a tarja aparecia com `PROVISORIO = True`, agora
-  aparece com `MEDIDA = False`), e a tarja na interface é PERMANENTE
-  enquanto isso for verdade. Duas ressalvas que valem enquanto a fonte for
+  (a lógica inverteu: antes a tarja aparecia com `PROVISORIO = True`, depois
+  passou a aparecer com `MEDIDA = False`). A tarja em si foi retirada da
+  barra lateral em 24/09/2026 — ver a decisão "Tarja de maré sai da barra
+  lateral" abaixo; `MEDIDA = False` segue valendo. Duas ressalvas que valem enquanto a fonte for
   TPXO, não BNDO/CHM — ver regras 7 e 8 do CLAUDE.md: (1) célula de ~3,7 km,
   ponto AO LARGO da barra, não resolve o estuário; (2) isto NÃO mexe no
   datum vertical do MDE, que é problema independente. O pedido ao BNDO/CHM
@@ -191,8 +194,8 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
   da v1.2 existia só porque PM/PMS/HAT eram placeholder em 0,00 m — travar
   era melhor que oferecer um offset inventado. Essa razão não existe mais
   (ver decisão de maré acima): o seletor de datum tem efeito real nos dois
-  modos agora. A tarja de aviso continua, permanente enquanto
-  `MEDIDA = False`, só que por outro motivo (modelo, não marégrafo).
+  modos agora. A tarja de aviso sobreviveu à v1.4 por outro motivo (modelo,
+  não marégrafo) e saiu na v1.5 — ver "Tarja de maré sai da barra lateral".
 - **Fundo cartográfico padrão = relevo sombreado (v1.2).** O hipsométrico
   vira opção secundária: em Caravelas ele gasta a faixa de cor toda nos
   primeiros metros e compete com a lâmina d'água.
@@ -269,8 +272,116 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
   na v1.3, opcionais para a leitura principal do mapa — o usuário liga quando
   quiser. O usuário continua podendo ativá-las manualmente; a lógica de
   renderização e os dados não mudaram.
+- **O "Modo de uso" passa a decidir a ÁREA analisada (v1.5, 24/09/2026).**
+  Antes ele só trocava valores padrão de cenário e de camadas. Agora carrega
+  também `recorte_padrao`: no modo **Turma**, a análise é recortada à **área de
+  estudo que a turma desenhou no QGIS** (`limite_turma.geojson`, convertido do
+  shapefile versionado — traçado sobre a isóbata de 500 m e as UCs APA Ponta da
+  Baleia/Abrolhos, RESEX Cassurubá e PARNA Marinho dos Abrolhos); no modo
+  **Livre**, segue valendo o domínio inteiro do MDE, como em todas as versões
+  anteriores. Isso REVISA a decisão de 22/09 (que deixava a área da turma como
+  camada puramente vetorial), mas NÃO revisa o motivo dela: `BBOX_WGS84`
+  continua sendo o domínio de leitura do raster nos dois modos, porque o FABDEM
+  não cobre o banco dos Abrolhos. Consequências assumidas, todas declaradas na
+  interface: (1) **o recorte é de RELATO, não de cálculo** — a conectividade
+  hidráulica é resolvida antes, no domínio inteiro, e o polígono entra depois,
+  na contagem, no desenho e no GeoTIFF; recortar antes do flood-fill cortaria
+  caminhos de água que entram pela borda e inventaria depressões "isoladas" que
+  não são (não inverter essa ordem numa refatoração); (2) os km² do modo Turma
+  são a TERRA da área de estudo coberta pelo MDE — 450,5 km², não os ~16.255 km²
+  de extensão do polígono, cuja maior parte é plataforma sem FABDEM; (3) fica de
+  fora a planície continental a oeste, que o modo Livre conta: o recorte tem
+  18,5 % da terra e captura 87–89 % da inundação a +1 e +2 m, então o que sai é
+  terreno alto que não alaga. A porcentagem para de ser diluída — a +2,00 m,
+  1,09 % do domínio vira 5,11 % da área de estudo, descrevendo os MESMOS 23 km²
+  alagados. O limite usa a cor de borda do .qlr do QGIS (`#232323`), a mesma
+  linha na tela, no relatório e no projeto do QGIS. O controle "Recortar à área da turma" fica visível nos dois
+  modos: o modo define o padrão, não tranca (mesma regra das outras chaves de
+  `CONFIG_MODOS`). Sem `limite_turma.geojson` o controle é desabilitado e o
+  app roda sem recorte — nunca exceção.
+- **Tarja de maré sai da barra lateral (v1.5, 24/09/2026).** O
+  `st.sidebar.warning` permanente que a v1.4 pendurou na seção "2 ·
+  Empilhamento de maré" ("Maré de modelo global, não medição…") foi removido a
+  pedido do Helio. O que ele dizia NÃO virou opcional: a procedência completa
+  — fonte, referência vertical, ressalva do JSON, ponto usado, distância do
+  alvo e constituintes — segue declarada na aba **Metadados** ("Procedência da
+  maré"), visível nos dois modos de uso, e na aba 📚 Turma ("O que esta
+  ferramenta NÃO diz"). `core.NIVEIS_MARE["MEDIDA"]` segue `False`: mudou onde
+  se avisa, não o que o dado é. Regra 3 continua valendo — se um dia a
+  procedência sair da aba Metadados, a tarja precisa voltar para a barra
+  lateral.
+
+- **O recorte do modo Turma é DURO, em tudo (24/09/2026).** Decisão pedida
+  depois de ver a primeira versão: no modo Turma a ferramenta mostra e conta
+  **só o que está dentro da área de estudo**, sem fantasma do lado de fora.
+  O que isso tocou, item por item: (1) na figura, `alpha_fora_recorte` passou
+  de 0,25 para **0,0** — o terreno de fora não é desenhado, e o item de legenda
+  "Terreno fora da área da turma" só reaparece se alguém puser esse alpha acima
+  de zero de novo; (2) o FUNDO do eixo deixa de ser `cor_oceano` quando há
+  recorte, senão a planície continental de fora apareceria pintada de azul e
+  terra alta lida como mar é o pior erro possível neste mapa — o oceano virou
+  camada desenhada só DENTRO do recorte, e o de fora é o papel da figura;
+  (3) a escala do hipsométrico (`nanpercentile` 99,5) passou a ser calculada só
+  sobre o que está dentro, senão o platô do Barreiras seguiria esticando a
+  rampa de cor de um terreno que nem aparece; (4) no mapa interativo, a camada
+  topográfica, as isolinhas e a cobertura MapBiomas passaram a ser recortadas
+  também — antes vinham do domínio inteiro e desenhavam relevo que não entra em
+  conta nenhuma (a exposição já era recortada); (5) nas isolinhas a ORDEM
+  importa: o NaN do recorte entra DEPOIS do preenchimento de oceano e DEPOIS da
+  suavização — antes do preenchimento, a borda do corte viraria uma isolinha de
+  0,5 m falsa; antes da suavização, o gaussiano espalharia NaN e comeria
+  isolinha boa lá dentro; (6) clique fora do recorte não devolve mais cota,
+  faixa nem classe de cobertura: devolve "fora da área de estudo", no balão e
+  nas métricas, porque mostrar "3,4 m, acima da cota" num pixel que não entra
+  em conta nenhuma convida a ler aquilo como resultado. Os NÚMEROS não mudaram
+  com nada disso (450,5 km² de terra, 23,02 km² inundados a +2,00 m): o recorte
+  já valia na contagem desde a primeira versão — o que mudou foi o desenho.
+- **As UCs abrem DESLIGADAS nos dois modos (24/09/2026).** `ucs_ligadas` saiu
+  de dentro de `camadas_turma_ligadas` e virou chave própria em `CONFIG_MODOS`.
+  Motivo: com o recorte, o limite da área de estudo já é a linha que importa, e
+  as três UCs preenchidas por cima disputam a leitura da lâmina d'água bem no
+  estuário, que é onde a inundação acontece. Continuam a um clique, nos dois
+  modos.
+
+- **A figura enquadra a ÁREA DE ESTUDO INTEIRA, não a grade do MDE
+  (24/09/2026).** Duas coisas mudaram juntas, e as duas vêm do mesmo lugar: a
+  figura era desenhada em coordenadas de PIXEL da grade do FABDEM, então não
+  conseguia mostrar nada fora dela. (1) O mar dentro do recorte era pintado com
+  um `imshow` sobre a grade, e parava na borda dela — um **retângulo azul de
+  canto reto** com cara de dado. Agora é um `PathPatch` do próprio polígono da
+  área de estudo: o mar termina exatamente onde o traçado termina. (2) O
+  enquadramento vinha do bbox da máscara RASTERIZADA, que é recortada pela
+  grade; agora vem do bbox do POLÍGONO, via `_bbox_pixel_geojson`. Isso funciona
+  porque geo->pixel é uma afim, e ela continua valendo fora do raster — as
+  coordenadas de pixel simplesmente ficam negativas ou maiores que a grade.
+  O quadro passou de 2.195 px de largura para ~8.250, de -39,49° a -37,24°.
+  Três ajustes vieram junto: a figura é **reproporcionada** ao quadro mantendo
+  a mesma área em polegadas (`aspecto_max = 2.4`), senão o eixo virava uma tira
+  no meio da página; a **barra de escala** passou a escolher um valor redondo
+  da série 1-2-5 proporcional à largura (50 km na área inteira, 10 km na
+  planície) em vez de 5 km fixos; e a **legenda** sai do mapa para uma faixa
+  abaixo dele quando o quadro é largo, porque no canto inferior direito ela
+  cobria justamente o traçado do limite. **Consequência a encarar:** a planície
+  de Caravelas ocupa ~8 % da largura desse quadro: o mapa passou a mostrar a
+  área de estudo como ela é — quase toda plataforma continental —, e a leitura
+  fina de exposição ficou pequena. Por isso o enquadramento virou **escolha do
+  usuário**, não decisão fixa: o parâmetro `enquadramento` de `figura_mapa`
+  aceita `"area_estudo"` (o polígono inteiro) e `"planicie"` (o bbox da máscara
+  rasterizada, ou seja, a parte com MDE — é onde a exposição acontece), com um
+  seletor na barra lateral, padrão em `"planicie"` e desabilitado sem recorte.
+  **Enquadramento não é recorte:** os dois contam exatamente os mesmos km², só
+  muda o que entra no quadro. Para o relatório, as duas figuras juntas contam a
+  história inteira — visão geral e detalhe.
 
 ## 6. Estado atual
+
+> **Nomenclatura:** as tags publicadas são v1.0 … v1.3 e agora **v2.0**. Os
+> marcos internos v1.4 (maré TPXO, modos Turma/Livre, camadas da turma) e v1.5
+> (recorte à área de estudo, figura recortada, retirada da tarja de maré)
+> nunca foram publicados sozinhos — saíram juntos na v2.0. As marcações "v1.4"
+> e "v1.5" espalhadas pelo código e por este arquivo são DATAS de decisão, não
+> releases; ficam como estão porque é assim que se sabe quando cada coisa foi
+> decidida.
 
 - [x] `01_mapa_elevacao.py` — mosaico FABDEM, recorte, reprojeção, máscara de
       oceano, mapa hipsométrico sombreado, curva hipsométrica, tabela altimétrica.
@@ -288,6 +399,14 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
       Col. 11 (visual); controles de tamanho para o mapa caber numa tela;
       `04_prepara_cobertura.py` e `src/cobertura.py`; validação contra o laudo
       do Cassurubá documentada.
+- [x] **v1.5** (24/09/2026) — o modo de uso decide a área analisada: modo Turma
+      recorta à área de estudo que a turma desenhou no QGIS
+      (`dados_web/fonte_limite_turma/*.shp` -> `09_limite_turma.py` ->
+      `limite_turma.geojson`: 450,5 km² de terra, 18,5 % do domínio), modo Livre
+      segue no domínio inteiro; recorte propagado para métricas, curva, matriz,
+      aba Turma, mapa interativo (reenquadra), figura (esmaecimento +
+      enquadramento + rodapé) e GeoTIFF (255 fora); tarja de maré removida da
+      barra lateral (procedência segue na aba Metadados).
 - [ ] Imagem de satélite de fundo (`contextily`, reprojeção para WebMercator).
 - [ ] Solicitação ao BNDO e integração da maré com constante de marégrafo.
       Passo intermediário dado em 22/09/2026: `NIVEIS_MARE` passou a vir do
