@@ -34,29 +34,47 @@ nmrm-caravelas/
 ├── README.md
 ├── LICENSE                    # CC BY-NC-SA 4.0
 ├── requirements.txt           # pisos de versão para o Streamlit Cloud
+├── requirements-geracao.txt   # shapely: só p/ gerar dados_web/, NÃO é instalado no app
 ├── .gitignore                 # ignora dados/ e saidas/ (dados_web/ é versionado)
 ├── .streamlit/config.toml     # tema e limites do app publicado
-├── config.py                  # caminhos, bbox, CRS — fonte única
+├── .devcontainer/             # ambiente reproduzível
+├── config.py                  # caminhos, bbox, CRS, área da turma — fonte única
 ├── .vscode/                   # launch.json + settings.json
 ├── src/
 │   ├── __init__.py
 │   ├── slr_core.py            # MOTOR — sem interface, toda a ciência
 │   ├── fonte_dados.py         # decide modo local x web, lê MDE e limiar
-│   ├── mapa_web.py            # camadas do mapa interativo (overlays, isolinhas)
+│   ├── mapa_web.py            # camadas do mapa interativo (overlays, isolinhas, turma)
 │   └── cobertura.py           # legenda MapBiomas Col. 11 + leitura do recorte
 ├── 01_mapa_elevacao.py        # mosaico/recorte/reprojeção FABDEM + mapa base
 ├── 02_simulador_nmrm.py       # interface Streamlit sobre slr_core
 ├── 03_prepara_dem_web.py      # gera os dados leves de dados_web/
 ├── 04_prepara_cobertura.py    # recorta o MapBiomas na grade do projeto
-├── 05_valida_cobertura_elevacao.py  # cobertura x elevação (FABDEM completo)
+├── 05_valida_cobertura_elevacao.py  # [diagnóstico] cobertura x elevação (FABDEM completo)
+├── 06_diagnostico_dossel.py   # [diagnóstico] viés de dossel sobre manguezal x "isolada"
+├── 07_mare_tpxo.py            # proveniência da maré TPXO9 (roda fora deste repo)
+├── 08_prepara_camadas_turma.py  # regenera ucs_turma.geojson a partir do CNUC bruto
+├── diagnostico_zeros.py       # [diagnóstico] os 0,0 m do FABDEM são todos oceano?
+├── histograma_cauda_costeira.py  # [diagnóstico] histograma fino da cauda inferior
+├── teste_sintetico.py         # valida o pipeline sem precisar do FABDEM
 ├── docs/
 │   ├── logica_da_ferramenta.md        # como a ferramenta raciocina, ponta a ponta
+│   ├── diagnostico_zeros.md           # investigação dos 0,0 m suspeitos no FABDEM
 │   └── validacao_mapbiomas_laudo.md   # cobertura x Laudo biológico do Cassurubá
-├── teste_sintetico.py         # valida o pipeline sem precisar do FABDEM
 ├── dados/                     # SÓ se NMRM_DIR_DADOS não estiver definida (ver "Onde ficam os dados")
-├── dados_web/                 # dados leves 30 m p/ deploy (VERSIONADO, ~2,3 MB)
+├── dados_web/                 # dados leves 30 m + camadas da turma + maré (VERSIONADO)
 └── saidas/                    # PNG, GeoTIFF, CSV (NÃO versionar)
 ```
+
+### Scripts de diagnóstico (não fazem parte do pipeline de produção)
+
+`05_valida_cobertura_elevacao.py`, `06_diagnostico_dossel.py`,
+`diagnostico_zeros.py` e `histograma_cauda_costeira.py` são **ferramentas de
+investigação**: só leem os dados, respondem uma pergunta específica e gravam
+relatório em `saidas/`. O app não os importa e nenhum produto de `dados_web/`
+depende deles; rodá-los ou não não muda nenhum número da ferramenta. O
+pipeline de produção é `01 → 03 → 04` (mais o `07` e o `08`, que geram
+proveniência de maré e das camadas da turma).
 
 ## Como instalar
 

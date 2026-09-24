@@ -35,34 +35,51 @@ de outubro.
 nmrm-caravelas/
 ├── CLAUDE.md                  # este arquivo
 ├── README.md
-├── requirements.txt
-├── .gitignore                 # ignorar dados/ e saidas/
-├── config.py                  # caminhos, bbox, CRS — fonte única
-├── .vscode/                    # launch.json + settings.json
+├── LICENSE                    # CC BY-NC-SA 4.0
+├── requirements.txt           # pisos de versão do app (Streamlit Cloud)
+├── requirements-geracao.txt   # shapely: SÓ p/ scripts que geram dados_web/; NÃO é instalado no app
+├── .gitignore                 # ignora dados/ e saidas/ (dados_web/ é versionado)
+├── .streamlit/config.toml     # tema escuro e limites do app publicado
+├── .devcontainer/             # devcontainer.json (ambiente reproduzível)
+├── .vscode/                   # launch.json + settings.json
+├── config.py                  # caminhos, bbox, CRS, BBOX_TURMA, nomes de arquivo — fonte única
 ├── src/
 │   ├── __init__.py
-│   ├── slr_core.py            # MOTOR — sem interface, toda a ciência
-│   ├── fonte_dados.py         # resolve modo local x web; leitura tolerante
-│   ├── mapa_web.py            # camadas do mapa interativo (overlays, isolinhas)
+│   ├── slr_core.py            # MOTOR — sem interface, toda a ciência (cota, máscara, estatística, figura)
+│   ├── fonte_dados.py         # resolve modo local x web; leitura tolerante; guarda de saturação do limiar
+│   ├── mapa_web.py            # camadas do mapa interativo (overlays, isolinhas, camadas da turma)
 │   └── cobertura.py           # legenda MapBiomas Col. 11 + leitura do recorte
 ├── 01_mapa_elevacao.py        # mosaico/recorte/reprojeção FABDEM + mapa base
-├── 02_simulador_nmrm.py       # interface Streamlit sobre slr_core
-├── 03_prepara_dem_web.py      # dados leves + limiar de conexão pré-computado
+├── 02_simulador_nmrm.py       # interface Streamlit sobre slr_core (modos Turma/Livre)
+├── 03_prepara_dem_web.py      # dados leves + limiar de conexão pré-computado (dados_web/)
 ├── 04_prepara_cobertura.py    # recorte do MapBiomas alinhado à grade do projeto
-├── 05_valida_cobertura_elevacao.py  # cobertura x elevação (FABDEM completo): percentis,
-│                                    # fração abaixo de cota, adjacência, distância ao mangue
+├── 05_valida_cobertura_elevacao.py  # [diagnóstico] cobertura x elevação (FABDEM completo)
+├── 06_diagnostico_dossel.py   # [diagnóstico] quanto do "isolada" vem do viés de dossel no mangue (somente leitura)
+├── 07_mare_tpxo.py            # proveniência da maré TPXO9-atlas v5 (roda FORA deste repo)
+├── 08_prepara_camadas_turma.py  # regenera ucs_turma.geojson a partir do CNUC bruto e compara
+├── diagnostico_zeros.py       # [diagnóstico] os 0,0 m do FABDEM são todos oceano? (docs/diagnostico_zeros.md)
+├── histograma_cauda_costeira.py  # [diagnóstico] histograma fino da cauda inferior de cota
 ├── teste_sintetico.py         # valida o pipeline sem precisar do FABDEM
 ├── docs/
 │   ├── logica_da_ferramenta.md        # como a ferramenta raciocina, ponta a ponta
 │   ├── diagnostico_zeros.md           # investigação dos 0,0 m suspeitos no FABDEM
 │   └── validacao_mapbiomas_laudo.md   # validação da cobertura contra o laudo
-├── dados/                     # entradas (NÃO versionar — FABDEM é CC BY-NC-SA)
-│   ├── fabdem/                # tiles brutos .tif
-│   ├── auxiliar/              # MapBiomas recortado, GEBCO, maregrafia
-│   └── processado/            # caravelas_fabdem_utm24s_30m.tif
-├── dados_web/                 # dados leves VERSIONADOS (dem, água, limiar, cobertura)
-└── saidas/                    # PNG, GeoTIFF, CSV (NÃO versionar)
+├── dados_web/                 # dados leves VERSIONADOS (~2,3 MB) — o que o app publicado lê
+│   ├── dem_30m_web.tif, mascara_agua_web.tif, limiar_conexao_web.tif, cobertura_web.tif
+│   ├── metadados_web.json     # diagnóstico do recorte e proveniência dos dados leves
+│   ├── mare_caravelas_tpxo9v5.json    # produto do 07 (constituintes e datums de maré)
+│   ├── ucs_turma.geojson      # 3 UCs da turma (CNUC 07/2026) — reproduzível pelo 08
+│   ├── isobatas_turma.geojson # isóbatas 20–500 m (CPRM/ANP 2013) — filtragem NÃO reprodutível
+│   ├── area_turma.geojson     # área de trabalho da turma, 21.955 km² — filtragem NÃO reprodutível
+│   └── LICENSE.txt
+├── dados/                     # SÓ existe se NMRM_DIR_DADOS não estiver definida (nesta máquina: vazia/ausente)
+└── saidas/                    # PNG, GeoTIFF, CSV com carimbo de data (NÃO versionar; faxina periódica)
 ```
+
+Os dados pesados vivem em **`NMRM_DIR_DADOS`** (nesta máquina, `C:\dados_nmrm`),
+não em `dados/`: `fabdem/` (tiles), `auxiliar/` (MapBiomas nacional
+`brazil_coverage-col11_2025.tif`, recorte de cobertura, `ucs_regiao.geojson`) e
+`processado/` (MDE e máscara de água). `config.DIR_DADOS` resolve para lá.
 
 `abrir_tiff_mapbiomas.py` foi o exploratório que originou o `04`. Está superado —
 não usar; o `04` alinha à grade e usa a legenda oficial conferida.
@@ -100,8 +117,9 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
 | **FABDEM V1-2** | MDE principal | Hawker et al. 2022, ERL 17:024016. Copernicus GLO-30 com dossel e edificações removidos por ML. 1 arcsec (~30 m), 60°S–80°N, datum vertical **EGM2008**. Licença **CC BY-NC-SA 4.0** (uso acadêmico OK). Oceano codificado como exatamente `0.0`. |
 | **IPCC AR6** | Cenários SSP | Valores de `CENARIOS_AR6` vêm da **Tabela 9.9 do AR6 WGI Cap. 9** (Fox-Kemper et al. 2021) — NMGM, mediana e faixa provável 17–83 %, base 1995–2014. **Nada foi calculado por nós.** SSP5-8.5 conferido contra o Sumário Executivo do Cap. 9 (set/2026): 0,23 [0,20–0,29] m em 2050 e 0,77 [0,63–1,01] m em 2100. SSP1-2.6, SSP2-4.5 e SSP5-8.5 LC ainda **não conferidos linha a linha**. São **globais (NMGM)**: substituir pelos locais do NASA/IPCC AR6 Sea Level Projection Tool (Garner et al., Zenodo 10.5281/zenodo.5914709). Ver `core.FONTE_CENARIOS`. |
 | **GEBCO 2025** | Batimetria de contexto | — |
-| **MapBiomas Col. 11 (2025)** | Cobertura do solo | `brazil_coverage-col11_2025.tif` (nacional, 728 MB, uint8, EPSG:4326). Recortado por `04_prepara_cobertura.py`, reamostragem **nearest** (categórico), alinhado pixel a pixel à grade do MDE. Legenda (código, nome, cor) transcrita do CSV oficial da Coleção 11 e conferida em set/2026 para os **17 códigos presentes** no recorte — os demais não foram transcritos e a interface os mostra como "fora da legenda conferida". Na v1.3 a camada é **apenas visual**. |
+| **MapBiomas Col. 11 (2025)** | Cobertura do solo | `brazil_coverage-col11_2025.tif` (nacional, 763 MB, uint8, EPSG:4326; em `DIR_AUXILIAR`, constante `config.ARQ_MAPBIOMAS_NACIONAL` — o `04` procura só ali). Recortado por `04_prepara_cobertura.py`, reamostragem **nearest** (categórico), alinhado pixel a pixel à grade do MDE. Legenda (código, nome, cor) transcrita do CSV oficial da Coleção 11 e conferida em set/2026 para os **17 códigos presentes** no recorte — os demais não foram transcritos e a interface os mostra como "fora da legenda conferida". Na v1.3 a camada é **apenas visual**. |
 | **TPXO9-atlas v5 (OSU)** | Datums de maré (`core.NIVEIS_MARE`) | Extraído em 22/09/2026 por `07_mare_tpxo.py` (roda fora deste repo; `dados_web/mare_caravelas_tpxo9v5.json` é o produto versionado). Grade 1/30°, ponto ao largo da barra (~3,7 km de célula, ~2,55 km do alvo original). 8 constituintes (Q1, O1, P1, K1, N2, M2, S2, K2) → NM/PMQ/PM/PMS/HAT (este último estimado — soma das amplitudes, limite superior). **Modelo, não medição** — `NIVEIS_MARE["MEDIDA"] = False`. Não resolve o estuário (regra 7); não mexe no datum vertical do MDE (regra 8). |
+| **Camadas da turma (vetoriais)** | Contexto desenhado sobre o mapa; **não entram em nenhuma conta** | `dados_web/ucs_turma.geojson` (3 UCs: APA Ponta da Baleia/Abrolhos, RESEX Cassurubá, PARNA Marinho dos Abrolhos — CNUC 07/2026, ICMBio/MMA): **reproduzível** por `08_prepara_camadas_turma.py` a partir de `ucs_regiao.geojson` (CNUC bruto, 42 UCs, em `DIR_AUXILIAR`); a regeneração bate com o versionado em feições, campos, vértices, coordenadas (dif. 0°) e área. A tolerância de simplificação (0,0008°, ~89 m) é **ajuste reverso, não a receita original**, e o CRS é só rotulado como EPSG:4674 (coordenadas em CRS84, sem transformar). `isobatas_turma.geojson` (Batimetria do Brasil CPRM/ANP 2013, derivada do GEBCO 925 m) e `area_turma.geojson` (área de trabalho da turma, 21.955 km²): origem declarada em `config.py`, **mas o passo de filtragem/derivação NÃO é reprodutível hoje** — a fonte bruta não está no repositório nem em `NMRM_DIR_DADOS`. **Atenção RESEX Cassurubá:** `ucs_turma.geojson` já contém o limite dela (item pendente do §6), mas a 249 vértices e ~89 m de tolerância (o original tem 2.482): serve para DESENHAR; para definir setor de análise, usar a geometria cheia de `ucs_regiao.geojson`. |
 | **BNDO/CHM · FEMAR** | Constantes harmônicas de MARÉGRAFO (substituiria o TPXO) | `chm.bndo@marinha.mil.br`. **Ainda não solicitado.** Caminho crítico — é a única fonte que tornaria `MEDIDA = True`. |
 | **Laudo biológico Cassurubá** | Validação da cobertura | Conferência qualitativa por setor em `docs/validacao_mapbiomas_laudo.md`. Convergiu em zonação, adjacência mangue–apicum e ausência de carcinicultura; **divergiu** na cota do manguezal (ver decisão do viés de dossel). |
 | **Andrade et al. 2003** | Evolução quaternária da planície | Paleoníveis +4,8 / +3,5 / +2,5 m — validação opcional. |
@@ -221,6 +239,29 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
   (65,8 x 69,8 km), então figura em largura cheia não cabe na tela. A altura do mapa
   interativo (padrão 620 px) e a largura da figura estática (padrão 58 %) são
   controles da barra lateral; `figsize` caiu de (10, 8) para (8, 7).
+- **Faxina e reorganização pré-v2.0 (24/09/2026).** (1) O trabalho de 22–24/09
+  foi commitado em 5 commits temáticos (o commit "Motor e interface" é misto por
+  arquivo: `slr_core.py`, `02` e `config.py` carregam as três frentes). (2) A pasta
+  manual `_backup_24set_pre_reversao/` virou o branch
+  **`experimento-v2.0-limite-turma`** (limite único da turma + recorte de relato;
+  parado e guardado) e foi apagada depois de conferir que nenhum arquivo ficou
+  fora do git. Nesse experimento a união das UCs com `area_turma` devolve
+  `area_turma` inalterada — o ganho era só de apresentação — e o recorte deixava
+  de fora só ~2,5 % da terra (faixa oeste, Barreiras), sem mudar a área inundada.
+  (3) **Os dados vivem em `NMRM_DIR_DADOS` (`C:\dados_nmrm`), não em `dados/`**;
+  o MapBiomas nacional e `ucs_regiao.geojson` foram movidos para
+  `C:\dados_nmrm\auxiliar\` e a árvore `dados/` do repositório foi removida
+  (o `.gitignore` mantém `dados/` como rede de segurança). (4) O `04` deixou de
+  varrer uma lista de candidatos (que incluía caminho literal do OneDrive) e
+  resolve só `DIR_AUXILIAR / config.ARQ_MAPBIOMAS_NACIONAL`, com erro claro se
+  ausente — única edição de lógica desta faxina; saída verificada (pixels de
+  `cobertura_web.tif` idênticos, só a tag `gerado_em` muda). (5) Removidos de
+  `saidas/`, `__pycache__/` e da raiz: logs, previews e comparações órfãs,
+  `dem_teste.tif` (resíduo de nome antigo do `teste_sintetico.py`) e duplicatas
+  byte a byte de 26/08 × 15–16/09 (mantida a data mais antiga do par).
+  `abrir_tiff_mapbiomas.py` foi POUPADO de propósito (nunca versionado; remoção
+  seria irreversível). (6) `08_prepara_camadas_turma.py` + `requirements-geracao.txt`
+  dão proveniência a `ucs_turma.geojson` (§4).
 - **Topografia e isolinhas vêm desligadas por padrão (16/09/2026).** Os dois
   toggles da seção "5 · Camadas do mapa interativo" abrem em `value=False`;
   Exposição ao NMRM continua ligada por padrão. Motivo: são as duas camadas
@@ -253,6 +294,7 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
       TPXO9-atlas v5 (modelo, não medição — ver §5 e regras 7-8) enquanto o
       BNDO/CHM não responde.
 - [ ] Tratar o viés de dossel sobre manguezal (ver regra 6) — bloqueia a Parte 2.
+- [x] Faxina pré-v2.0 e proveniência de `ucs_turma.geojson` (24/09/2026, ver §5).
 - [ ] Limites vetoriais da RESEX Cassurubá para trocar as faixas de latitude por setores reais.
 - [ ] Parte 2 — resposta ecológica cruzando com MapBiomas.
 
