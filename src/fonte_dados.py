@@ -316,6 +316,39 @@ def mascara_inundacao_auto(core,
     # --- 2. Atalho pelo raster de limiar ------------------------------------
     if limiar is not None:
         cota_cm = int(round(cota_m * CONFIG_FONTE["fator_escala_cm"]))
+
+        # GUARDA DE SATURAÇÃO (defesa em profundidade). O clamp estático na
+        # interface (02_simulador_nmrm.py: `_maior_empilhamento`) tenta
+        # impedir que a cota total passe do teto do raster ANTES de chegar
+        # aqui, mas é garantia que depende de alguém lembrar de atualizá-la
+        # a cada parcela nova somada à cota — esta checagem roda no PONTO DE
+        # USO e lê o teto do PRÓPRIO raster a cada chamada, não de uma
+        # constante duplicada em outro módulo (a mesma conta de
+        # `cota_maxima_limiar`, mas local: chamar aquela função de novo
+        # exigiria reimportar e recalcular o mesmo filtro duas vezes).
+        #
+        # Por que "presos em isolada", não "todo mundo vira conectado":
+        # `limiar <= cota_cm` é monotônico só dentro do que
+        # `03_prepara_dem_web.py` de fato testou. Pixel gravado como
+        # `CONFIG_FONTE["nunca_alaga"]` significa "não conectou dentro do
+        # intervalo pré-computado" — NÃO "nunca conecta". Acima do teto
+        # gravado, esse pixel fica PRESO em `isolada` mesmo que na realidade
+        # conectasse numa cota um pouco maior: a cota pedida está fora do
+        # que foi simulado, e a área inundada sai SUBESTIMADA (isolada
+        # SUPERESTIMADA) acima do teto — sem a comparação numérica em si
+        # falhar, só deixando de significar o que deveria.
+        util = limiar[limiar < CONFIG_FONTE["nunca_alaga"]]
+        teto_limiar_m = float(util.max()) / CONFIG_FONTE["fator_escala_cm"] if util.size else None
+        saturado = teto_limiar_m is not None and cota_m > teto_limiar_m
+        if saturado:
+            print(f"[LIMIAR] AVISO: cota pedida ({cota_m:.2f} m) excede o teto "
+                  f"pré-computado do raster de limiar ({teto_limiar_m:.2f} m). "
+                  "Pixels ainda não conectados na maior cota testada ficam "
+                  "presos em 'isolada' mesmo que conectassem de verdade numa "
+                  "cota maior — área inundada SUBESTIMADA acima do teto. "
+                  "Resultado devolvido mesmo assim (diagnóstico não trava a "
+                  "simulação); não citar este número acima do teto.")
+
         conectada = limiar <= cota_cm
         inundada = abaixo & conectada
         isolada = abaixo & ~conectada
@@ -329,7 +362,9 @@ def mascara_inundacao_auto(core,
         print(f"[MASCARA] modo=limiar pré-computado | cota={cota_m:.2f} m "
               f"({cota_cm} cm) | inundada={int(inundada.sum())} px | "
               f"isolada={int(isolada.sum())} px")
-        return _empacota(inundada, isolada, abaixo, area_px)
+        return _empacota(inundada, isolada, abaixo, area_px,
+                         saturado_limiar=saturado, cota_pedida_m=cota_m,
+                         teto_limiar_m=teto_limiar_m)
 
     # --- 3. Flood-fill em tempo real ----------------------------------------
     return core.mascara_inundacao(
@@ -342,12 +377,25 @@ def mascara_inundacao_auto(core,
     )
 
 
-def _empacota(inundada, isolada, abaixo, area_pixel_m2):
+def _empacota(inundada, isolada, abaixo, area_pixel_m2,
+              saturado_limiar: bool = False, cota_pedida_m: float = None,
+              teto_limiar_m: float = None):
+    """
+    `saturado_limiar`/`cota_pedida_m`/`teto_limiar_m` só vêm preenchidos no
+    caminho 2 (raster de limiar) e só quando a cota pedida excede o teto
+    pré-computado — ver o comentário na guarda de saturação, acima. A
+    interface lê `mascaras["saturado_limiar"]` para decidir se mostra a
+    tarja; nos demais caminhos (bathtub, flood-fill) ficam nos defaults
+    (`False`/`None`) porque não existe raster de limiar ali para saturar.
+    """
     return {
         "inundada": inundada,
         "isolada": isolada,
         "abaixo": abaixo,
         "area_pixel_m2": area_pixel_m2,
+        "saturado_limiar": saturado_limiar,
+        "cota_pedida_m": cota_pedida_m,
+        "teto_limiar_m": teto_limiar_m,
     }
 
 
