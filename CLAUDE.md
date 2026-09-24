@@ -49,6 +49,9 @@ nmrm-caravelas/
 ├── 02_simulador_nmrm.py       # interface Streamlit sobre slr_core
 ├── 03_prepara_dem_web.py      # dados leves + limiar de conexão pré-computado
 ├── 04_prepara_cobertura.py    # recorte do MapBiomas alinhado à grade do projeto
+├── 07_mare_tpxo.py            # proveniência da maré (roda fora do repo)
+├── 08_limite_turma.py         # une UCs + área da turma -> dados_web/limite_turma.geojson
+├── requirements-geracao.txt   # shapely — só p/ gerar produtos, NÃO vai p/ o app
 ├── 05_valida_cobertura_elevacao.py  # cobertura x elevação (FABDEM completo): percentis,
 │                                    # fração abaixo de cota, adjacência, distância ao mangue
 ├── teste_sintetico.py         # valida o pipeline sem precisar do FABDEM
@@ -102,6 +105,7 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
 | **GEBCO 2025** | Batimetria de contexto | — |
 | **MapBiomas Col. 11 (2025)** | Cobertura do solo | `brazil_coverage-col11_2025.tif` (nacional, 728 MB, uint8, EPSG:4326). Recortado por `04_prepara_cobertura.py`, reamostragem **nearest** (categórico), alinhado pixel a pixel à grade do MDE. Legenda (código, nome, cor) transcrita do CSV oficial da Coleção 11 e conferida em set/2026 para os **17 códigos presentes** no recorte — os demais não foram transcritos e a interface os mostra como "fora da legenda conferida". Na v1.3 a camada é **apenas visual**. |
 | **TPXO9-atlas v5 (OSU)** | Datums de maré (`core.NIVEIS_MARE`) | Extraído em 22/09/2026 por `07_mare_tpxo.py` (roda fora deste repo; `dados_web/mare_caravelas_tpxo9v5.json` é o produto versionado). Grade 1/30°, ponto ao largo da barra (~3,7 km de célula, ~2,55 km do alvo original). 8 constituintes (Q1, O1, P1, K1, N2, M2, S2, K2) → NM/PMQ/PM/PMS/HAT (este último estimado — soma das amplitudes, limite superior). **Modelo, não medição** — `NIVEIS_MARE["MEDIDA"] = False`. Não resolve o estuário (regra 7); não mexe no datum vertical do MDE (regra 8). |
+| **Limite da turma (UCs + isóbata 500 m)** | Camada única de contorno e máscara de recorte | `dados_web/limite_turma.geojson` (EPSG:4674, 1 feição), gerado em 24/09/2026 por `08_limite_turma.py` (shapely ≥ 2.0 só na geração — `requirements-geracao.txt`, fora do `requirements.txt`) como união das 3 UCs (CNUC 07/2026, ICMBio/MMA) com `area_turma.geojson` (Batimetria do Brasil CPRM/ANP 2013 / GEBCO 925 m). Conferido: 0,00 km² das UCs fora da área da turma. **A união é redundante — resultado, não detalhe:** unir as UCs com `area_turma` devolve `area_turma` inalterada (mesmo anel, 168 vértices, só o vértice inicial rodado pelo `buffer(0)`), ou seja, `area_turma.geojson` já era essa união. O ganho da camada é de apresentação (uma camada só, sem preenchimento, sem as linhas internas de sobreposição APA/RESEX/PARNA), não de geometria; ela não acrescenta área. **Área:** o excesso esférico (R = 6.371.008,8 m) dá 22.010,8 km²; o valor elipsoidal de `config.AREA_TURMA_KM2` é 21.955 km². A diferença de +0,25 % é de FÓRMULA, não de geometria (é o mesmo polígono); **vale o elipsoidal**, o esférico é o menos preciso e só aparece no GeoJSON como `area_km2_aprox_esferica` (+ `metodo_area`), aferição de método, não número citável. Os tooltips de `area_turma` e `limite` usam ambos `AREA_TURMA_KM2` (`:,.0f`). |
 | **BNDO/CHM · FEMAR** | Constantes harmônicas de MARÉGRAFO (substituiria o TPXO) | `chm.bndo@marinha.mil.br`. **Ainda não solicitado.** Caminho crítico — é a única fonte que tornaria `MEDIDA = True`. |
 | **Laudo biológico Cassurubá** | Validação da cobertura | Conferência qualitativa por setor em `docs/validacao_mapbiomas_laudo.md`. Convergiu em zonação, adjacência mangue–apicum e ausência de carcinicultura; **divergiu** na cota do manguezal (ver decisão do viés de dossel). |
 | **Andrade et al. 2003** | Evolução quaternária da planície | Paleoníveis +4,8 / +3,5 / +2,5 m — validação opcional. |
@@ -221,6 +225,21 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
   (65,8 x 69,8 km), então figura em largura cheia não cabe na tela. A altura do mapa
   interativo (padrão 620 px) e a largura da figura estática (padrão 58 %) são
   controles da barra lateral; `figsize` caiu de (10, 8) para (8, 7).
+- **Recorte do modo Turma é de RELATO, não de cálculo (24/09/2026).** Com
+  "Recortar à área da turma" ligado (padrão do modo Turma; desligado no Livre —
+  o modo define o padrão, não tranca nada), a contagem de área, a figura, o
+  mapa web, as tabelas por UC e o GeoTIFF só consideram o que cai dentro de
+  `limite_turma.geojson` (`core.mascara_recorte`, só rasterio). A conectividade
+  é resolvida ANTES, no domínio inteiro do MDE: recortar antes cortaria
+  caminhos de água que entram pela borda e inventaria "isoladas" falsas. Medido
+  em 24/09/2026 (dados completos, 30 m): terra no domínio 2.433,0 km²; dentro do
+  recorte 2.372,4 km² (97,5 %); o que sai é uma faixa de ~1 km na borda oeste
+  (lon −39,600 a −39,592; Grupo Barreiras, cota mediana ~50 m). Área inundada
+  IDÊNTICA com e sem recorte a +1,00 m (1,27 km²) e +2,00 m (18,94 km²) — o
+  recorte muda o denominador (% da área emersa), não o numerador. Os km² com
+  recorte são a interseção área da turma × domínio do MDE, nunca os 21.955 km²
+  da área da turma. Modo Livre com recorte desligado devolve os valores
+  anteriores exatamente.
 - **Topografia e isolinhas vêm desligadas por padrão (16/09/2026).** Os dois
   toggles da seção "5 · Camadas do mapa interativo" abrem em `value=False`;
   Exposição ao NMRM continua ligada por padrão. Motivo: são as duas camadas
@@ -247,6 +266,8 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
       Col. 11 (visual); controles de tamanho para o mapa caber numa tela;
       `04_prepara_cobertura.py` e `src/cobertura.py`; validação contra o laudo
       do Cassurubá documentada.
+- [x] **v2.0 (24/09/2026)** — camada única `limite_turma.geojson` +
+      recorte de relato do modo Turma (ver §5).
 - [ ] Imagem de satélite de fundo (`contextily`, reprojeção para WebMercator).
 - [ ] Solicitação ao BNDO e integração da maré com constante de marégrafo.
       Passo intermediário dado em 22/09/2026: `NIVEIS_MARE` passou a vir do

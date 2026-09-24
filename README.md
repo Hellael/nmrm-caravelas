@@ -297,6 +297,21 @@ Ajustes vindos da apresentação ao grupo:
   é a única fonte que tornaria `MEDIDA = True`. Nenhum valor de maré, datum
   ou projeção local é inventado — se o dado não chegou, permanece `0.00`
   sinalizado.
+- **Limite único da turma (24/09/2026).** `dados_web/limite_turma.geojson` é o
+  contorno externo da união das três UCs com a área da turma (isóbata de
+  500 m), gerado por `08_limite_turma.py` — que precisa de `shapely` (só ele:
+  `pip install -r requirements-geracao.txt`; **não** está no
+  `requirements.txt`, o app lê o produto com `json` da stdlib). Aparece como
+  a checkbox "Limite da área da turma"; as camadas de área, isóbatas e UCs
+  continuam disponíveis.
+- **Recorte à área da turma (24/09/2026).** Checkbox "Recortar à área da
+  turma": ligado por padrão no modo Turma, desligado no Livre. Conta, desenha e
+  exporta só o que cai dentro de `limite_turma.geojson`; a conectividade com o
+  mar é resolvida antes, no domínio inteiro (recorte de relato, não de
+  cálculo). Os km² passam a ser a interseção área da turma × domínio do MDE
+  (2.372 de 2.433 km² de terra); deixa de fora uma faixa estreita da borda
+  oeste (Grupo Barreiras). Sem `limite_turma.geojson` o controle fica
+  desabilitado e o app segue sem recorte.
 - **Viés do FABDEM sobre manguezal.** O FABDEM remove dossel e edificações
   por machine learning, mas em manguezal denso o resíduo de altura de árvore
   ainda pode superar o próprio sinal de NMRM simulado. Não substituir por

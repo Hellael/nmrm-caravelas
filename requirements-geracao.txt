@@ -1,0 +1,9 @@
+# Dependências SÓ dos scripts que geram produtos versionados de dados_web/.
+# NÃO fazem parte do app publicado — o Streamlit Cloud instala apenas o
+# requirements.txt, e o app lê os produtos com json da stdlib.
+#
+# 08_limite_turma.py  -> dados_web/limite_turma.geojson
+shapely>=2.0
+#
+# 07_mare_tpxo.py também precisa de numpy + netCDF4, mas roda em outra
+# máquina (contra o atlas TPXO9, ~10 GB) — ver o cabeçalho do script.

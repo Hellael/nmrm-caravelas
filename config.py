@@ -111,6 +111,10 @@ BBOX_TURMA = {"lon_min": -39.60, "lon_max": -37.24,
 ARQ_UCS_TURMA      = "ucs_turma.geojson"
 ARQ_ISOBATAS_TURMA = "isobatas_turma.geojson"
 ARQ_AREA_TURMA     = "area_turma.geojson"
+# Produto de `08_limite_turma.py`: contorno externo da união (UCs + área da
+# turma), uma feição só. Também guarda a geometria de área — o recorte do
+# modo Turma precisa dela para mascarar o raster.
+ARQ_LIMITE_TURMA   = "limite_turma.geojson"
 
 # area_turma.geojson não traz a área como propriedade (só o nome). Valor
 # documentado acima, usado pela interface para não recalcular geodésia de um

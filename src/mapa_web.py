@@ -60,7 +60,8 @@ CODIGOS_CLASSE = {
 # CLASSIFICAÇÃO
 # =============================================================================
 
-def classificar_overlay(mascaras: dict, mask_agua: np.ndarray = None) -> np.ndarray:
+def classificar_overlay(mascaras: dict, mask_agua: np.ndarray = None,
+                       recorte: np.ndarray = None) -> np.ndarray:
     """
     Monta o array uint8 de classes a partir do dict retornado por
     `slr_core.mascara_inundacao`. Água atual tem prioridade visual sobre
@@ -73,7 +74,27 @@ def classificar_overlay(mascaras: dict, mask_agua: np.ndarray = None) -> np.ndar
     classes[mascaras["inundada"]] = CODIGOS_CLASSE["inundada"]
     if mask_agua is not None:
         classes[mask_agua] = CODIGOS_CLASSE["agua_atual"]
+    if recorte is not None:
+        # Zera fora do recorte -> alpha 0 no PNG. As máscaras já foram
+        # resolvidas no domínio inteiro; o corte é só de exibição.
+        classes[~recorte] = 0
     return classes
+
+
+def bounds_recorte(recorte: np.ndarray, transform, crs) -> list | None:
+    """
+    [[sul, oeste], [norte, leste]] em EPSG:4326 do bbox do recorte (pixels
+    True), para `folium.Map.fit_bounds`. None se o recorte estiver vazio.
+    """
+    if recorte is None or not recorte.any():
+        return None
+    lins = np.where(recorte.any(axis=1))[0]
+    cols = np.where(recorte.any(axis=0))[0]
+    x0, y0 = transform * (cols.min(), lins.min())
+    x1, y1 = transform * (cols.max() + 1, lins.max() + 1)
+    lons, lats = warp_transform(crs, CRS.from_epsg(CONFIG_MAPA_WEB["epsg_saida"]),
+                                [x0, x1, x0, x1], [y0, y0, y1, y1])
+    return [[min(lats), min(lons)], [max(lats), max(lons)]]
 
 
 # =============================================================================
@@ -445,16 +466,25 @@ CONFIG_CAMADAS_TURMA = {
         "alpha_preenchimento": 0.18,
         "espessura_borda":     1.6,
     },
+    # Contorno externo da união UCs + área da turma (`08_limite_turma.py`).
+    # Sem preenchimento: a geometria de área fica no arquivo porque o recorte
+    # do modo Turma precisa dela, mas o desenho é só a borda.
+    "limite": {
+        "cor_borda":           "#0B3D5C",
+        "alpha_preenchimento": 0.0,
+        "espessura_borda":     2.6,
+    },
 }
 
 
 def carregar_camadas_turma(dir_dados) -> dict:
     """
-    Lê os três GeoJSON da área de trabalho da turma com `json` da stdlib —
+    Lê os quatro GeoJSON da área de trabalho da turma com `json` da stdlib —
     arquivos pequenos e estáticos, então não justificam adicionar geopandas
     ao requirements.txt; `folium.GeoJson` aceita dict puro.
 
-    Nenhum dos três é gerado por este projeto (regra: só consumir):
+    Os três primeiros não são gerados por este projeto (regra: só consumir);
+    `config.ARQ_LIMITE_TURMA` é produto de `08_limite_turma.py` (união dos três):
     `config.ARQ_UCS_TURMA` vem do CNUC 07/2026 (ICMBio/MMA);
     `config.ARQ_ISOBATAS_TURMA` e `config.ARQ_AREA_TURMA` vêm da Batimetria
     do Brasil CPRM/ANP 2013 (derivada do GEBCO 925 m).
@@ -463,11 +493,13 @@ def carregar_camadas_turma(dir_dados) -> dict:
     geodésia nem puxar geopandas:
       - `area_turma`: injeta `area_km2_fmt` a partir de `config.AREA_TURMA_KM2`
         (o GeoJSON só traz o nome).
+      - `limite`: idem `area_km2_fmt`, do mesmo `config.AREA_TURMA_KM2`
+        (é o mesmo polígono de `area_turma`).
       - `ucs`: injeta `ha_total_fmt`, o campo `ha_total` (string) formatado
         com separador de milhar, no mesmo estilo `:,.0f` usado no resto da
         interface (`02_simulador_nmrm.py`).
 
-    Retorna {"area_turma": dict|None, "isobatas": dict|None, "ucs": dict|None}.
+    Retorna {"area_turma", "isobatas", "ucs", "limite"}, cada um dict|None.
     Arquivo ausente ou ilegível não levanta exceção — a camada correspondente
     volta `None` e um aviso é impresso; quem chama decide como reagir (a
     interface simplesmente deixa de desenhar aquela camada).
@@ -477,6 +509,7 @@ def carregar_camadas_turma(dir_dados) -> dict:
         "area_turma": config.ARQ_AREA_TURMA,
         "isobatas":   config.ARQ_ISOBATAS_TURMA,
         "ucs":        config.ARQ_UCS_TURMA,
+        "limite":     config.ARQ_LIMITE_TURMA,
     }
 
     camadas: dict = {}
@@ -498,6 +531,13 @@ def carregar_camadas_turma(dir_dados) -> dict:
             feicao.setdefault("properties", {})["area_km2_fmt"] = \
                 f"{config.AREA_TURMA_KM2:,.0f}"
 
+    if camadas.get("limite") is not None:
+        # Mesmo número e mesmo formato do tooltip de `area_turma`: é o mesmo
+        # polígono. O canônico é config.AREA_TURMA_KM2, não a propriedade
+        # esférica que o GeoJSON traz.
+        for feicao in camadas["limite"].get("features", []):
+            feicao.setdefault("properties", {})["area_km2_fmt"] =                 f"{config.AREA_TURMA_KM2:,.0f}"
+
     if camadas.get("ucs") is not None:
         for feicao in camadas["ucs"].get("features", []):
             propriedades = feicao.setdefault("properties", {})
@@ -507,5 +547,5 @@ def carregar_camadas_turma(dir_dados) -> dict:
                 propriedades["ha_total_fmt"] = "—"
 
     n_ok = sum(v is not None for v in camadas.values())
-    print(f"[MAPA_WEB] camadas da turma: {n_ok}/3 carregadas")
+    print(f"[MAPA_WEB] camadas da turma: {n_ok}/4 carregadas")
     return camadas

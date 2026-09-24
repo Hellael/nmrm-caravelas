@@ -206,6 +206,40 @@ Barreiras, terreno alto que jamais alagaria. **O número em km² é o que
 importa** para a planície; a porcentagem está diluída pela extensão do
 recorte.
 
+### O limite único da turma é redundante em geometria (v2.0)
+
+`limite_turma.geojson` é a união das três UCs com `area_turma.geojson`. O
+resultado dessa união é `area_turma` inalterada — mesmo anel, 168 vértices,
+só com o vértice inicial rodado pelo `buffer(0)` —, o que significa que
+`area_turma.geojson` **já era** essa união. O ganho da camada é de apresentação
+(uma camada só, sem preenchimento e sem as linhas internas de sobreposição
+entre APA, RESEX e PARNA), não de geometria: ela não acrescenta área. A
+área citável é a de `config.AREA_TURMA_KM2` (21.955 km², elipsoidal); o valor
+esférico de 22.010,8 km² que o gerador imprime é aferição de método, e a
+diferença de 0,25 % é de fórmula, não de geometria.
+
+### Recorte à área da turma: a ordem importa (v2.0)
+
+No modo Turma o número pode ser recortado ao limite definido pela turma
+(`limite_turma.geojson`, união das três UCs com a área fechada pela isóbata
+de 500 m). A ordem das operações é a parte que não pode ser trocada:
+
+1. **Conectividade** — resolvida no domínio INTEIRO do MDE (flood-fill no modo
+   local; `limiar_conexao_web.tif`, pré-computado sobre o domínio inteiro, no
+   modo web).
+2. **Recorte** — só depois, na hora de contar e desenhar.
+
+Se o MDE fosse recortado antes do passo 1, a água que entra pela borda do
+recorte deixaria de ter caminho até o mar e a ferramenta inventaria depressões
+"isoladas" que não são. Por isso o recorte é **de relato, não de cálculo**.
+
+Em números (dados completos, 30 m): 2.433,0 km² de terra no domínio, 2.372,4
+km² dentro do recorte (97,5 %). O que sai é uma faixa de ~1 km na borda oeste,
+sobre o Grupo Barreiras. A +1,00 m e +2,00 m a área inundada é a mesma com e
+sem recorte (1,27 e 18,94 km²); muda só o denominador. Os km² com recorte são a
+interseção entre a área da turma e o domínio do MDE — não os 21.955 km² da
+área da turma, quase toda oceânica.
+
 ---
 
 ## 7. De onde vêm os cenários
