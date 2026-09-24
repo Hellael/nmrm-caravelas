@@ -66,6 +66,9 @@ do projeto é a faixa contígua de 586,37 km².
 - A separação contígua/confinada da faixa 0–6 m usa a mesma cota fixa de
   6 m (Andrade et al. 2003) para toda a planície; não diferencia setores
   norte/sul do estuário Caravelas–Peruípe.
-- Resultado condicionado à conectividade de 8-vizinhos e à ausência da maré
-  (`NIVEIS_MARE["PROVISORIO"] = True`), ambos parâmetros centralizados em
-  `src/slr_core.py`.
+- Resultado condicionado à conectividade de 8-vizinhos e ao datum de maré
+  usado na corrida (NM = 0,00 m por padrão). Desde 22/09/2026 `NIVEIS_MARE`
+  vem do TPXO9-atlas v5, não mais de placeholder (`PROVISORIO` saiu do
+  dicionário; ver `NIVEIS_MARE["MEDIDA"]`) — mas o nível médio (NM)
+  continua em offset 0,00 m, então este diagnóstico não muda se rodado de
+  novo com o datum padrão. Parâmetros centralizados em `src/slr_core.py`.

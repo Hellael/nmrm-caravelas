@@ -1,0 +1,53 @@
+{
+  "fonte": "TPXO9-atlas v5 (OSU), grade de 1/30°",
+  "referencia_vertical": "nível médio do mar local do modelo de maré",
+  "ressalva": "célula de ~3,7 km: representa a maré AO LARGO da barra, não dentro dos canais do estuário de Caravelas",
+  "ponto": {
+    "lon": -39.0333,
+    "lat": -17.7333,
+    "profundidade_m": 7.0,
+    "dist_do_alvo_km": 2.55
+  },
+  "constituintes": {
+    "Q1": {
+      "amplitude_m": 0.0219,
+      "fase_graus": 133.15
+    },
+    "O1": {
+      "amplitude_m": 0.0852,
+      "fase_graus": 164.33
+    },
+    "P1": {
+      "amplitude_m": 0.0135,
+      "fase_graus": 221.99
+    },
+    "K1": {
+      "amplitude_m": 0.0412,
+      "fase_graus": 230.91
+    },
+    "N2": {
+      "amplitude_m": 0.1457,
+      "fase_graus": 191.08
+    },
+    "M2": {
+      "amplitude_m": 0.85,
+      "fase_graus": 191.47
+    },
+    "S2": {
+      "amplitude_m": 0.3936,
+      "fase_graus": 214.34
+    },
+    "K2": {
+      "amplitude_m": 0.1248,
+      "fase_graus": 207.18
+    }
+  },
+  "niveis_m": {
+    "PM_media_m": 0.913,
+    "PM_sizigia_m": 1.244,
+    "PM_quadratura_m": 0.456,
+    "HAT_estimado_m": 1.676,
+    "numero_forma_F": 0.127,
+    "regime": "semidiurna"
+  }
+}
