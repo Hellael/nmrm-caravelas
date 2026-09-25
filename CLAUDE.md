@@ -336,6 +336,42 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
   em conta nenhuma convida a ler aquilo como resultado. Os NÚMEROS não mudaram
   com nada disso (450,5 km² de terra, 23,02 km² inundados a +2,00 m): o recorte
   já valia na contagem desde a primeira versão — o que mudou foi o desenho.
+- **Paleolinhas de costa: entrada é LINHA, polígono é derivado (v2.1, 24/09/2026).**
+  A reconstrução paleoambiental de Andrade et al. (2003) entra pelas Figs. 9 a 15,
+  georreferenciadas no QGIS e digitalizadas à mão. A camada de origem
+  (`dados_web/fonte_paleolinhas/paleolinhas.shp`) guarda apenas a LINHA de costa
+  de cada estágio, com o campo `estagio` (I a VII); `10_paleolinhas.py` fecha o
+  polígono de terra emersa contra o quadro da figura e grava
+  `dados_web/paleolinhas_turma.geojson`. Motivo de não digitalizar polígono: o
+  contorno fechado obrigaria a redesenhar a moldura do quadro a cada uma das sete
+  figuras, e a diferença de área ENTRE estágios — que é o que a comparação mede —
+  passaria a conter erro de moldura. Com linha, a moldura é idêntica por
+  construção. O fechamento usa `polygonize` mais uma ÂNCORA DO CONTINENTE no canto
+  noroeste (`CONFIG_PALEO["ancora_continente"]`); ilhas destacadas, como a
+  ilha-barreira do Estágio II, entram por ponto-semente. A regra anterior ("terra
+  = peça que encosta na borda oeste") foi descartada: quando a paleolinha sai pela
+  própria borda oeste ela parte essa borda em dois trechos, as duas peças passam a
+  encostar nela e o script devolvia o quadro inteiro como terra. Três verificações
+  param o script em vez de gravar número errado em silêncio: soma das peças igual à
+  área do quadro, terra acima de 98 % do quadro, e linha que não atravessa o quadro.
+- **O quadro das paleolinhas é o das figuras, não o BBOX do projeto (v2.1).**
+  39°30'–39°00'W x 17°30'–18°00'S, idêntico nas sete figuras, MENOR que
+  `config.BBOX_WGS84`. Fora dele o artigo não desenhou nada, então a camada paleo
+  não afirma nada. Comparação com hoje é feita dentro desse mesmo quadro.
+- **É RECONSTRUÇÃO, não simulação (v2.1).** Os polígonos são redesenho de figura
+  publicada, com erro posicional da ordem de CENTENAS DE METROS (figura de 2003
+  escaneada, 4 pontos de controle). Servem para comparar estágios entre si, onde o
+  erro é em boa parte sistemático; NÃO são medida absoluta e a interface arredonda
+  para km² inteiro. A palavra "simulação" não deve ser usada para esta camada — o
+  que o motor simula é exposição a cota, que é outra coisa. E cortar o FABDEM
+  MODERNO numa paleocota não reconstrói paleogeografia: o terreno de hoje é
+  produto daquele nível do mar, não seu contemporâneo.
+- **Georreferenciamento validado contra o FABDEM (24/09/2026).** A costa atual
+  derivada do FABDEM cai sobre a linha "present day coastline" que o próprio artigo
+  desenha na Fig. 9, ao longo de ~60 km (Ponta da Baleia, reentrância, Ponta do
+  Catoeiro) — ver `docs/validacao_georref_fig9.png`. Repetir esse teste a cada
+  figura nova: é barato e pega erro de warp antes da digitalização.
+
 - **As UCs abrem DESLIGADAS nos dois modos (24/09/2026).** `ucs_ligadas` saiu
   de dentro de `camadas_turma_ligadas` e virou chave própria em `CONFIG_MODOS`.
   Motivo: com o recorte, o limite da área de estudo já é a linha que importa, e
@@ -382,6 +418,10 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
 > e "v1.5" espalhadas pelo código e por este arquivo são DATAS de decisão, não
 > releases; ficam como estão porque é assim que se sabe quando cada coisa foi
 > decidida.
+>
+> **v2.1 é marco INTERNO, não publicado** (24/09/2026): tag local `v2.1`, sem
+> push e sem release no GitHub. Entra quando a Parte 1 do paleoambiente estiver
+> conferida localmente.
 
 - [x] `01_mapa_elevacao.py` — mosaico FABDEM, recorte, reprojeção, máscara de
       oceano, mapa hipsométrico sombreado, curva hipsométrica, tabela altimétrica.
@@ -407,6 +447,14 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
       aba Turma, mapa interativo (reenquadra), figura (esmaecimento +
       enquadramento + rodapé) e GeoTIFF (255 fora); tarja de maré removida da
       barra lateral (procedência segue na aba Metadados).
+- [x] **v2.1** (24/09/2026, INTERNO — não publicado) — paleolinhas de costa,
+      Estágio I: `10_paleolinhas.py`, `dados_web/fonte_paleolinhas/` (shapefile de
+      linhas + GeoTIFF georreferenciado da Fig. 9 + `.gpkg` original + README) e
+      `dados_web/paleolinhas_turma.geojson`. Terra emersa do Estágio I: 1.144 km²
+      no quadro da figura, contra 1.425 km² hoje pelo FABDEM — +281 km² (+24,5 %)
+      de progradação desde os terraços pleistocênicos. Fechamento conferido
+      (Δ 0,000 km² contra a área do quadro) e georreferenciamento validado contra
+      a costa atual do FABDEM.
 - [ ] Imagem de satélite de fundo (`contextily`, reprojeção para WebMercator).
 - [ ] Solicitação ao BNDO e integração da maré com constante de marégrafo.
       Passo intermediário dado em 22/09/2026: `NIVEIS_MARE` passou a vir do
@@ -415,6 +463,16 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
 - [ ] Tratar o viés de dossel sobre manguezal (ver regra 6) — bloqueia a Parte 2.
 - [x] Faxina pré-v2.0 e proveniência de `ucs_turma.geojson` (24/09/2026, ver §5).
 - [ ] Limites vetoriais da RESEX Cassurubá para trocar as faixas de latitude por setores reais.
+- [ ] Paleolinhas dos Estágios II a VII (Figs. 10 a 15). O II precisa de
+      ponto-semente em `ESTAGIOS["II"]["sementes_extra"]` — a ilha-barreira é massa
+      de terra separada do continente. Salvar o `.points` do georreferenciador de
+      cada figura: o da Fig. 9 não foi salvo e por isso o GeoTIFF (1,9 MB) teve que
+      ser versionado; com `.points` os TIFF podem sair do git para
+      `NMRM_DIR_DADOS/auxiliar/paleo/`.
+- [ ] Aba "Paleoambiente de Caravelas" no `02` (slider de tempo pelos estágios,
+      comparação de área com hoje). Fica em `src/paleo.py`, fora do `slr_core.py`.
+- [ ] Cruzar as paleolinhas com o MapBiomas: idade do substrato sob cada
+      ecossistema atual — é a ponte com a Parte 2.
 - [ ] Parte 2 — resposta ecológica cruzando com MapBiomas.
 
 ## 7. Regras de conduta científica (não negociáveis)
