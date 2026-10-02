@@ -402,6 +402,40 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
   Catoeiro) — ver `docs/validacao_georref_fig9.png`. Repetir esse teste a cada
   figura nova: é barato e pega erro de warp antes da digitalização.
 
+- **Redesign em páginas (v3.0, 02/10/2026).** A barra lateral de seis seções e
+  as oito abas viraram cinco páginas com `st.navigation(position="top")`:
+  **Simulador** (público), **Turma**, **Paleoambiente**, **Exposição e cenários**
+  (curva + matriz juntas) e **Metadados**. Inspirado no visual de
+  runcell.dev (sea level rise simulator); mockup aprovado no canvas "Simulador
+  NMRM Caravelas — redesign". Decisões: (1) **por que páginas** — o Streamlit
+  executa todas as abas a cada interação; com páginas só a aberta roda (pico
+  de memória da página Simulador caiu de ~1,1–1,5 GB para ~0,43 GB); (2) a
+  figura de 300 dpi é **gerada sob demanda** (botão "Gerar figura" + "Baixar
+  PNG", com prévia), nunca a cada rerun; (3) Simulador e Turma são a MESMA
+  função (`pagina_simulador(perfil)`, `CONFIG_PERFIS`), herdeira do "Modo de
+  uso": o perfil define o padrão, **não tranca** (decisão mantida em 02/10);
+  cada perfil guarda seus valores (chaves `w_*_{perfil}`, persistidas entre
+  páginas por `_manter_estado`); (4) controles num cartão à esquerda do mapa;
+  o que não é essencial (sobrelevação, regra hidrológica, área mínima,
+  cartografia da figura, tamanho do mapa) foi para o popover "Ajustes
+  avançados"; (5) as páginas Exposição e Metadados usam o último cenário
+  simulado (`st.session_state[CHAVE_ESTADO]`); a Exposição mostra as curvas do
+  domínio inteiro e da área da turma juntas; (6) tema em `.streamlit/config.toml`
+  (Rubik no texto, IBM Plex Mono nos números, cantos "large"); CSS próprio
+  mínimo, só em classes `nmrm-*`; (7) a aba "📚 Turma" virou a seção "Análises
+  da disciplina" da página Turma; (8) "Depressões sem conexão" desligado agora
+  some também do mapa interativo, não só da figura; (9) o GeoTIFF classificado
+  só é oferecido no modo local (no Cloud ele seria gravado no servidor).
+- **Cenários IPCC AR6 de volta ao modo web, rotulados como GLOBAIS (02/10/2026).**
+  SUPERA "Modo web esconde o cenário IPCC AR6 (v1.2)". Decisão do Helio: as
+  duas páginas de simulador oferecem o AR6 (Público: Manual | AR6; Turma:
+  Níveis da turma | Manual | AR6), sempre com a tarja "Nível médio GLOBAL
+  (NMGM), não o relativo local de Caravelas" e o sufixo "(NMGM)" no rótulo do
+  cenário. A regra 1 continua valendo — o número global não pode ser
+  apresentado como local; o que mudou é que ele aparece declarado como global.
+  Pendente: trocar pelos valores regionais (Garner et al., Zenodo
+  10.5281/zenodo.5914709, ponto em frente a Caravelas).
+
 - **As UCs abrem DESLIGADAS nos dois modos (24/09/2026).** `ucs_ligadas` saiu
   de dentro de `camadas_turma_ligadas` e virou chave própria em `CONFIG_MODOS`.
   Motivo: com o recorte, o limite da área de estudo já é a linha que importa, e
@@ -441,7 +475,7 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
 
 ## 6. Estado atual
 
-> **Nomenclatura:** as tags publicadas são v1.0 … v1.3, v2.0 e agora **v2.1**.
+> **Nomenclatura:** as tags publicadas são v1.0 … v1.3, v2.0, v2.1 e agora **v3.0**.
 > Os marcos internos v1.4 (maré TPXO, modos Turma/Livre, camadas da turma) e
 > v1.5 (recorte à área de estudo, figura recortada, retirada da tarja de maré)
 > nunca foram publicados sozinhos — saíram juntos na v2.0. As marcações "v1.4"
@@ -456,6 +490,11 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
 > em 01/10/2026 antes de qualquer tag ou release sair (ver §5, "Paleolinhas
 > de costa… v2.1 preliminar… SUPERADO"). A tag `v2.1` publicada aponta para o
 > commit da versão de sete estágios, não para a preliminar.
+>
+> **v3.0 é PUBLICADA** (02/10/2026) — redesign em cinco páginas, cenários AR6
+> liberados como nível global e a correção de memória da figura do
+> paleoambiente (commit 4a7ee4a, que saiu depois da tag v2.1). Major porque a
+> interface mudou inteira: abas e barra lateral deram lugar a páginas.
 
 - [x] `01_mapa_elevacao.py` — mosaico FABDEM, recorte, reprojeção, máscara de
       oceano, mapa hipsométrico sombreado, curva hipsométrica, tabela altimétrica.
@@ -497,6 +536,9 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
       preliminar (24/09/2026, só Estágio I, 1.144 km² no quadro — marco
       interno, nunca publicado) que foi SUPERADA por esta antes de qualquer
       tag ou release sair.
+- [x] **v3.0** (02/10/2026) — redesign em cinco páginas (`st.navigation`),
+      controles ao lado do mapa, figura de 300 dpi sob demanda, tema Rubik,
+      cenários AR6 liberados no modo web com rótulo de nível GLOBAL. Ver §5.
 - [ ] Imagem de satélite de fundo (`contextily`, reprojeção para WebMercator).
 - [ ] Solicitação ao BNDO e integração da maré com constante de marégrafo.
       Passo intermediário dado em 22/09/2026: `NIVEIS_MARE` passou a vir do

@@ -23,6 +23,8 @@ Claude outputs/
 
 # Logs de sessao (inspecao, execucao local) — nao sao artefato do projeto.
 scratch_*.log
+# Log do streamlit run deixado na raiz ao testar localmente — mesmo motivo.
+.streamlit_run_*.log
 
 # Exploratorio superado pelo 04_prepara_cobertura.py — ver CLAUDE.md.
 abrir_tiff_mapbiomas.py
