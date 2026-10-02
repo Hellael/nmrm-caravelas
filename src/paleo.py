@@ -390,30 +390,26 @@ def figura_paleo(core, dados_dem: dict, classes: np.ndarray, est: dict,
     ax.imshow(hs, cmap="gray", vmin=pal["hillshade_vmin"], vmax=pal["hillshade_vmax"],
               alpha=0.85, zorder=0)
 
-    # Mar nos DOIS momentos, pintado só DENTRO do quadro de análise. Em cinza
-    # ele lia como "sem dado", que é a leitura errada — ali é oceano. Fora do
-    # quadro segue sendo o papel da figura, nunca cor de água: a regra da v1.5
-    # vale aqui igual, terra alta lida como mar é o pior erro deste mapa.
-    # `dentro_quadro` chega por parâmetro justamente para esta camada não
-    # extravasar para onde a análise não foi feita.
-    if dentro_quadro is not None:
-        mar = dentro_quadro & (classes == 0)
-        if mar.any():
-            rgba = np.zeros(mar.shape + (4,), dtype=float)
-            r, g, b = tuple(int(core.CONFIG_MAPA["cor_oceano"][i:i + 2], 16) / 255
-                            for i in (1, 3, 5))
-            rgba[mar] = (r, g, b, cfg["alpha_oceano"])
-            ax.imshow(rgba, zorder=1)
+    # Mar nos DOIS momentos + as três classes numa ÚNICA camada RGBA uint8.
+    # (v2.1, 01/10/2026) Antes eram até quatro `imshow`, cada um com um RGBA
+    # float64 da grade inteira (~5 M px x 4 x 8 B = 160 MB cada), presos à
+    # figura até o `plt.close`: ~640 MB só aqui, o que derrubava o app no
+    # Streamlit Community Cloud ao abrir a aba. Em uint8 é UM array de ~20 MB.
+    #
+    # O mar é pintado só DENTRO do quadro de análise: em cinza ele lia como
+    # "sem dado", e fora do quadro segue sendo o papel da figura, nunca cor de
+    # água (regra da v1.5: terra alta lida como mar é o pior erro deste mapa).
+    def _rgba8(cor_hex: str, alpha: float) -> tuple:
+        return tuple(int(cor_hex[i:i + 2], 16) for i in (1, 3, 5)) + (round(255 * alpha),)
 
-    # As três classes, cada uma como uma máscara colorida só onde vale.
+    camada = np.zeros(classes.shape + (4,), dtype=np.uint8)
+    if dentro_quadro is not None:
+        camada[dentro_quadro & (classes == 0)] = _rgba8(core.CONFIG_MAPA["cor_oceano"],
+                                                        cfg["alpha_oceano"])
     for valor, chave in ((1, "permanente"), (2, "ganho"), (3, "perda")):
-        m = (classes == valor)
-        if not m.any():
-            continue
-        rgba = np.zeros(m.shape + (4,), dtype=float)
-        r, g, b = tuple(int(cfg["cores"][chave][i:i + 2], 16) / 255 for i in (1, 3, 5))
-        rgba[m] = (r, g, b, cfg["alpha_figura"])
-        ax.imshow(rgba, zorder=2)
+        camada[classes == valor] = _rgba8(cfg["cores"][chave], cfg["alpha_figura"])
+    ax.imshow(camada, zorder=2, interpolation="nearest")
+    del camada
 
     # Contorno do polígono do estágio — é a paleolinha de costa, que é o dado.
     path = core._path_geometria(est["_geometria"], transform, cfg["crs_origem"])
