@@ -2,33 +2,59 @@
 """
 10_paleolinhas.py — Projeto 26.09 (simulador NMRM Caravelas)
 
-Converte as PALEOLINHAS DE COSTA, digitalizadas à mão no QGIS sobre as figuras
-georreferenciadas de Andrade et al. (2003), em polígonos de TERRA EMERSA por
-estágio evolutivo -> `dados_web/paleolinhas_turma.geojson`.
+Converte as PALEOLINHAS DE COSTA, digitalizadas à mão no QGIS pela turma sobre
+as figuras georreferenciadas de Andrade et al. (2003), em polígonos de TERRA
+EMERSA por estágio evolutivo -> `dados_web/paleolinhas_turma.geojson`.
 
-POR QUE A ENTRADA É LINHA E A SAÍDA É POLÍGONO
-    Digitalizar o polígono fechado obrigaria a contornar o quadro da figura
-    inteiro (borda oeste, sul e leste) a cada estágio. Isso é centenas de
-    vértices que não são dado — são moldura — e, pior, uma moldura redesenhada
-    de forma ligeiramente diferente a cada figura. A diferença de área ENTRE
-    estágios é exatamente o que a aba de comparação vai medir, então erro de
-    moldura viraria sinal falso de progradação.
+ENTRADA (v2.1, 01/10/2026)
+    UM SHAPEFILE DE LINHAS POR ESTÁGIO, em `dados_web/fonte_paleolinhas/estagios/`:
+    `estagio_I.shp`, `estagio_II.shp`, ... `estagio_VII.shp`. O estágio sai do
+    NOME do arquivo — a tabela de atributos não precisa de campo nenhum (a turma
+    entregou só o `Id` padrão, e está ótimo assim).
 
-    Traçando só a linha de costa, o quadro é idêntico em todos os estágios por
-    construção, e a única coisa que varia é o que foi lido no artigo.
+    Isto substitui o `paleolinhas.shp` único da versão preliminar de 24/09/2026
+    (só o Estágio I, campo `estagio`, nunca publicada), descartado em
+    01/10/2026: os arquivos da turma cobrem os sete estágios, inclusive o I, e
+    foram digitalizados com o mesmo critério.
 
-COMO O POLÍGONO É FECHADO
-    Topologia padrão: une a(s) linha(s) do estágio com o retângulo do quadro,
-    deixa `polygonize` cortar em peças, e classifica cada peça:
+COMO A TURMA DIGITALIZOU (e por que o fechamento mudou)
+    Cada linha é uma FRONTEIRA TERRA/ÁGUA: costa oceânica, margem de laguna,
+    contorno de ilha, margem de canal. Algumas linhas também correm ao longo da
+    MOLDURA da figura (o contorno do continente foi fechado pela borda), e
+    vários contornos foram feitos em mais de um trecho que se encostam pelas
+    pontas.
 
-      TERRA  - peça que encosta na borda OESTE do quadro (os Tabuleiros do
-               Grupo Barreiras estão emersos em todos os sete estágios), ou
-               peça que contém algum ponto-semente declarado em ESTAGIOS.
-      MAR    - todo o resto.
+    A regra da versão preliminar ("a peça que contém a âncora é terra, o resto
+    é mar, ilha entra por ponto-semente") não dá conta disso: num estágio com
+    laguna, ilhas dentro da laguna e ilha-barreira, ela exigiria uma semente
+    por ilha. A regra nova não precisa de semente de terra nenhuma:
 
-    Os pontos-semente existem para o Estágio II, em que a ilha-barreira é uma
-    massa de terra SEPARADA do continente e portanto não encosta em borda
-    nenhuma. Sem semente ela seria classificada como mar.
+        Toda linha separa terra de água. Atravessar uma linha troca a classe.
+
+    O mar aberto a leste é sempre mar (semente única, `ponto_mar`). A partir
+    dele, cada peça do recorte recebe a classe oposta à das vizinhas do outro
+    lado de uma linha — é uma 2-coloração do mapa. Ilha dentro de laguna dentro
+    de continente sai certa sozinha, em qualquer profundidade de aninhamento.
+
+PASSO A PASSO
+    1. MOLDURA: o trecho de cada linha a menos de `margem_borda_graus` da borda
+       do quadro é descartado — é moldura redesenhada à mão, não costa. A
+       moldura entra pelo retângulo EXATO do quadro, idêntico nos sete
+       estágios (mesmo motivo da versão preliminar: erro de moldura não pode
+       virar diferença de área entre estágios).
+    2. PONTAS: ponta que ficou junto à borda é prolongada até cruzá-la; ponta
+       solta no meio do mapa a menos de `tol_costura_graus` de outra linha é
+       COSTURADA nela (fecha as frestas entre trechos digitalizados
+       separadamente); anel quase fechado é fechado.
+    3. CORTE: `polygonize` sobre linhas + quadro. O que sobrar sem fechar
+       peça nenhuma é avisado — fresta não costurada junta duas peças que
+       deviam estar separadas.
+    4. CLASSE: 2-coloração a partir do mar. Lascas menores que
+       `area_min_lasca_km2` (entre dois traçados quase coincidentes) herdam a
+       classe da vizinha com a maior fronteira comum.
+    5. CONFERÊNCIAS que PARAM o script (nada é gravado): peças que não
+       reconstituem o quadro; `ponto_continente` (Barreiras) saindo mar; terra
+       acima de `frac_terra_max`; conflito de classe entre peças grandes.
 
 O QUE ESTE SCRIPT NÃO FAZ
     Não deriva, não simplifica e não suaviza o traçado. A geometria é a que
@@ -37,23 +63,19 @@ O QUE ESTE SCRIPT NÃO FAZ
     editar o GeoJSON na mão.
 
 PRECISÃO — LEIA ANTES DE CITAR QUALQUER NÚMERO
-    A origem é uma figura de 2003 escaneada e georreferenciada por 4 pontos de
+    A origem é uma figura de 2003 escaneada e georreferenciada por pontos de
     controle nos cantos do quadro. O erro posicional resultante é da ordem de
     CENTENAS DE METROS. Os km² impressos aqui servem para comparar estágios
     entre si (onde o erro é em boa parte sistemático e se cancela), não para
-    serem publicados como medida absoluta. Por isso a interface arredonda para
-    km² inteiro — decimal ali seria decoração.
+    serem publicados como medida absoluta.
 
     Isto é uma RECONSTRUÇÃO redesenhada de Andrade et al. (2003), não uma
     simulação, não um cálculo nosso, e não um dado medido.
 
 PROVENIÊNCIA
-    O shapefile de origem é VERSIONADO em `dados_web/fonte_paleolinhas/`,
-    junto com os arquivos `.points` do georreferenciador do QGIS em
-    `dados_web/fonte_paleolinhas/georref/`. Os `.points` são minúsculos e são
-    o trabalho manual insubstituível: com eles + a figura original do artigo,
-    qualquer pessoa refaz o warp. O GeoTIFF georreferenciado em si NÃO é
-    versionado (é pesado e é regenerável) — mora em NMRM_DIR_DADOS/auxiliar/paleo/.
+    Versionado em `dados_web/fonte_paleolinhas/`: os shapefiles da turma
+    (`estagios/`) e, em `georref/`, as figuras originais com os `.points` do
+    georreferenciador do QGIS — com os dois, qualquer pessoa refaz o warp.
 
     Dependências (`shapely` + `pyshp`) estão em `requirements-geracao.txt` e
     NÃO em `requirements.txt`: o app publicado lê o GeoJSON com `json` da
@@ -62,13 +84,14 @@ PROVENIÊNCIA
     Rodar:  pip install -r requirements-geracao.txt
             python 10_paleolinhas.py
 
-Autor: Helio (georreferenciamento e traçado no QGIS) | Assistência: Claude (conversão)
+Autor: Helio e turma de Ecossistemas Marinhos Costeiros (georreferenciamento e
+traçado no QGIS) | Assistência: Claude (conversão)
 """
 import json
 import math
 import sys
+from collections import deque
 from datetime import date
-from pathlib import Path
 
 import numpy as np
 
@@ -80,54 +103,61 @@ import config
 
 CONFIG_PALEO = {
     "dir_saida":      config.DIR_RAIZ / "dados_web",
-    "subdir_fonte":   "fonte_paleolinhas",
-    "arq_fonte":      "paleolinhas",          # sem extensão (pyshp)
+    "subdir_fonte":   "fonte_paleolinhas/estagios",
+    "padrao_fonte":   "estagio_{est}",        # sem extensão (pyshp)
     "arq_produto":    "paleolinhas_turma.geojson",
-    "campo_estagio":  "estagio",              # campo de texto no shapefile
 
     # QUADRO DAS FIGURAS 9 a 15 do artigo. As sete compartilham exatamente o
     # mesmo enquadramento: 39°30'W–39°00'W x 17°30'S–18°00'S. É ele, e não
-    # config.BBOX_WGS84, que delimita o que a paleolinha pode afirmar: fora do
-    # quadro o artigo não desenhou nada, então não há o que reconstruir.
-    # (config.BBOX_WGS84 é MAIOR: vai a -39,60/-38,98 em lon e -18,05/-17,42
-    # em lat. A camada paleo vale só dentro do quadro abaixo.)
+    # config.BBOX_WGS84, que delimita o que a paleolinha pode afirmar.
     "bbox_figura": {
         "lon_min": -39.50, "lon_max": -39.00,
         "lat_min": -18.00, "lat_max": -17.50,
     },
 
-    # Quanto estender as PONTAS da linha digitalizada, em graus (~11 km), para
-    # garantir que ela atravesse o quadro de lado a lado. Sem isso, parar 200 m
-    # antes da borda deixa o quadro sem corte e o polygonize devolve uma peça
-    # só. A extensão é recortada pelo quadro logo em seguida, então não
-    # inventa geometria dentro da área de análise.
-    "extensao_pontas_graus": 0.10,
+    # Faixa junto à borda do quadro, em graus (~220 m), em que o traçado é
+    # tratado como MOLDURA redesenhada e descartado. Maior que o tremor da mão
+    # ao seguir a borda (a turma ficou a 10–150 m dela) e bem menor que
+    # qualquer feição costeira que encoste no quadro.
+    "margem_borda_graus": 0.002,
 
-    # ÂNCORA DO CONTINENTE — ponto que, em todos os sete estágios, está em
-    # terra firme: o canto NOROESTE do quadro, sobre os Tabuleiros do Grupo
-    # Barreiras. A peça que contém este ponto é o continente.
-    #
-    # Por que âncora e não "a peça que encosta na borda oeste": quando a
-    # paleolinha sai pela própria borda oeste (e não pela borda sul), ela parte
-    # essa borda em dois trechos e AS DUAS peças passam a encostar nela — a
-    # regra devolvia o quadro inteiro como terra, sem mar nenhum. Um ponto não
-    # tem essa ambiguidade. Pode ser sobrescrito por estágio em ESTAGIOS[..]["ancora"].
-    "ancora_continente": (-39.499, -17.501),
+    # Quanto prolongar uma ponta que terminou junto à borda, para garantir que
+    # ela CRUZE o quadro (o excedente é recortado em seguida).
+    "extensao_borda_graus": 0.02,
 
-    # A terra não pode ser o quadro inteiro nem coisa nenhuma: os dois casos
-    # significam que a classificação falhou, não que o mar sumiu.
+    # Fresta máxima entre trechos que deviam se encostar, em graus (~440 m). A
+    # maior encontrada nos sete estágios é de ~260 m (Estágio II). Acima disso
+    # a ponta é tratada como solta e AVISADA — não é costurada no chute.
+    "tol_costura_graus": 0.004,
+
+    # Ultrapassagem da costura além do ponto de contato, em graus (~20 m):
+    # garante que o nó exista depois do `unary_union` (encostar exatamente na
+    # linha deixa o cruzamento à mercê do arredondamento de ponto flutuante).
+    "ultrapassa_costura_graus": 0.0002,
+
+    # SEMENTE DO MAR: mar aberto, a leste da Ponta da Baleia, em todos os
+    # sete estágios. É a ÚNICA semente da 2-coloração.
+    "ponto_mar": (-39.01, -17.75),
+
+    # CONFERÊNCIA DO CONTINENTE: sobre os Tabuleiros do Grupo Barreiras, emersos
+    # nos sete estágios. Não é semente — se a coloração devolver mar aqui, a
+    # leitura das linhas está errada e o script PARA.
+    "ponto_continente": (-39.45, -17.60),
+
+    # Peça menor que isto (5 ha) é LASCA entre dois traçados quase coincidentes
+    # e herda a classe da vizinha com a maior fronteira comum. Fica abaixo da
+    # menor ilha digitalizada e bem abaixo do erro posicional da figura.
+    "area_min_lasca_km2": 0.05,
+
+    # Fresta não costurada deixa linha sem fechar peça nenhuma. Acima deste
+    # comprimento total por estágio, o script AVISA (não para).
+    "alerta_solta_km": 0.5,
+
     "frac_terra_max": 0.98,
-
-    # As peças do corte têm que somar a área do quadro. Acima deste desvio não
-    # é arredondamento — é geometria quebrada, e aí o script PARA.
     "tol_fechamento_km2": 0.5,
 
-    # Se a linha digitalizada ficar mais longe que isto da borda do quadro em
-    # alguma ponta, é sinal de traçado incompleto — o script AVISA (não para,
-    # porque a extensão pode salvar; mas vale conferir no QGIS).
-    "tol_alerta_ponta_graus": 0.02,
-
     "raio_terra_m":   6_371_008.8,            # raio médio (IUGG), igual ao 09
+    "km_por_grau":    111.32,                 # só para imprimir distâncias
     "casas_coord":    6,                      # ~0,1 m; evita ruído de float
     "rotulo_crs":     "urn:ogc:def:crs:EPSG::4674",
     "arq_debug":      config.DIR_SAIDAS / "paleo_pecas_debug.geojson",
@@ -137,102 +167,132 @@ CONFIG_PALEO = {
 # =============================================================================
 # ESTÁGIOS — metadados de Andrade et al. (2003), §VII e Figs. 9 a 15
 # =============================================================================
-# Ficam AQUI, e não como campos do shapefile, para o QGIS exigir só `estagio`.
-# Menos digitação manual = menos erro de digitação em dado que já é frágil.
-#
-# `nmrm_m` é o nível relativo do mar do momento retratado, quando o artigo dá
-# um número. Onde ele descreve uma FASE (regressão, progradação) sem cota
-# associada, fica None — inventar número aqui seria exatamente o que a regra 1
-# do CLAUDE.md proíbe.
+# Ficam AQUI, e não na tabela de atributos, para o QGIS não exigir nada além
+# da linha. `nmrm_m` é o nível relativo do mar do momento retratado, quando o
+# artigo dá um número; onde ele descreve uma FASE sem cota, fica None —
+# inventar número aqui seria exatamente o que a regra 1 do CLAUDE.md proíbe.
 
 ESTAGIOS = {
+    # Revisado em 01/10/2026 contra o texto de Andrade et al. (2003), §VII e
+    # legendas das Figs. 9 a 15. Os sete são estágios QUATERNÁRIOS do modelo
+    # evolutivo — inclusive o VII, que é a última fase do modelo e NÃO a costa
+    # atual (a costa atual é a linha tracejada "present day coastline" das
+    # figuras, e no simulador vem do FABDEM).
     "I": {
         "figura": "Fig. 9",
-        "idade_rotulo": "> 120.000 anos AP",
+        "periodo": "Pleistoceno",
+        "idade_rotulo": "após 120.000 anos AP",
         "idade_ordem": 120_000,              # anos AP, só para ordenar o slider
         "nmrm_m": None,
-        "nmrm_obs": ("regressão posterior ao máximo da Penúltima Transgressão "
-                     "(+8 ± 2 m em ~123.000 AP; Martin et al. 1980). O artigo "
-                     "não atribui cota à linha desenhada."),
+        "nmrm_obs": ("fase regressiva posterior ao máximo da Penúltima "
+                     "Transgressão (+8 ± 2 m em ~123.000 AP; Martin et al. 1980), "
+                     "que se estende até ~18.000 AP. O artigo não atribui cota à "
+                     "linha desenhada."),
         "titulo": "Construção da planície pleistocênica",
-        "descricao": ("Limite externo dos Terraços Marinhos Pleistocênicos. A "
-                      "planície holocênica, a Ilha de Caçumba e todo o sistema "
-                      "de manguezal AINDA NÃO EXISTEM — ali era mar."),
-        "sementes_extra": [],
+        "descricao": ("Com a descida do nível do mar, sedimentos retrabalhados da "
+                      "plataforma interna e trazidos pela deriva litorânea fazem a "
+                      "costa progradar por acréscimo de cordões litorâneos, "
+                      "formando os Terraços Marinhos Pleistocênicos. Costa arenosa, "
+                      "contínua, com orientação muito parecida com a atual "
+                      "(controlada pelos recifes do Parcel das Paredes)."),
     },
     "II": {
         "figura": "Fig. 10",
+        "periodo": "Holoceno",
         "idade_rotulo": "5.600 anos cal AP",
         "idade_ordem": 5_600,
         "nmrm_m": 4.8,
         "nmrm_obs": ("máximo da Última Transgressão, +4,8 ± 0,5 m na curva de "
                      "Salvador (Martin et al. 1980, 2002)."),
-        "titulo": "Afogamento da planície pleistocênica",
-        "descricao": ("Sistema ilha-barreira / laguna, com os sistemas lagunares "
-                      "I (sul) e II (norte). A ilha-barreira é massa de terra "
-                      "SEPARADA do continente: precisa de ponto-semente."),
-        # Preencher ao digitalizar a Fig. 10: um ponto sobre a ilha-barreira.
-        "sementes_extra": [],
+        "titulo": "Afogamento da planície pleistocênica na Última Transgressão",
+        "descricao": ("A subida do mar afoga e retrabalha parte dos terraços "
+                      "pleistocênicos e forma um sistema ilha-barreira/laguna, com o "
+                      "Sistema Lagunar I (sul) e o II (norte). Já existia uma "
+                      "paleo-Ponta do Catoeiro na cadeia de ilhas-barreira; a deriva "
+                      "litorânea era dominantemente para norte."),
     },
     "III": {
         "figura": "Fig. 11",
-        "idade_rotulo": "pós-5.600 anos cal AP",
+        "periodo": "Holoceno",
+        "idade_rotulo": "após 5.600 anos cal AP",
         "idade_ordem": 5_000,
         "nmrm_m": None,
-        "nmrm_obs": "fase regressiva após o máximo; sem cota atribuída no artigo.",
-        "titulo": "Progradação na enseada Baleia–Catoeiro",
-        "descricao": ("Preenchimento do setor côncavo entre a paleo-Ponta da "
-                      "Baleia e a paleo-Ponta do Catoeiro."),
-        "sementes_extra": [],
+        "nmrm_obs": ("descida do nível do mar após o máximo de 5.600 cal AP, "
+                     "chegando um pouco abaixo do atual antes de ~3.800 cal AP. "
+                     "Sem cota atribuída à linha."),
+        "titulo": "Progradação na enseada entre as paleo-Pontas da Baleia e do Catoeiro",
+        "descricao": ("A queda do nível do mar favorece a progradação, primeiro na "
+                      "enseada entre a paleo-Ponta da Baleia e a paleo-Ponta do "
+                      "Catoeiro: preenchimento transversal do setor côncavo e, "
+                      "depois, crescimento de um pontal arenoso para nordeste. Os "
+                      "sistemas lagunares I e II perdem contato com o mar e viram "
+                      "brejos de água doce."),
     },
     "IV": {
         "figura": "Fig. 12",
+        "periodo": "Holoceno",
         "idade_rotulo": "~4.000 anos cal AP",
         "idade_ordem": 4_000,
         "nmrm_m": None,
-        "nmrm_obs": ("fase regressiva; a emersão do arco recifal interno a "
-                     "partir de ~4.000 cal AP inverte a deriva litorânea no "
-                     "setor norte."),
-        "titulo": "Início da sedimentação no setor norte",
-        "descricao": "Inversão da deriva litorânea dominante no setor norte.",
-        "sementes_extra": [],
+        "nmrm_obs": ("o artigo não data o estágio; a idade é a da emersão do arco "
+                     "recifal interno (~4.000 cal AP), com datações de "
+                     "4.530–3.930 cal AP na figura. O 2º máximo da curva de "
+                     "Salvador (+3,5 ± 0,5 m, ~3.500 cal AP) cai entre os "
+                     "Estágios IV e V."),
+        "titulo": "Início da sedimentação no setor norte da planície",
+        "descricao": ("A emersão do arco interno de recifes bloqueia as ondas de "
+                      "sudeste e inverte a deriva litorânea no setor norte "
+                      "(de nordeste para sul). Duas pontas marcam a costa: "
+                      "paleo-Ponta da Baleia e paleo-Ponta do Catoeiro, onde pontais "
+                      "arenosos isolam lagunas alongadas."),
     },
     "V": {
         "figura": "Fig. 13",
+        "periodo": "Holoceno",
         "idade_rotulo": "2.100 anos cal AP",
         "idade_ordem": 2_100,
         "nmrm_m": 2.5,
         "nmrm_obs": ("terceiro máximo da curva de Salvador, +2,5 ± 0,5 m. As "
                      "oscilações de alta frequência são CONTESTADAS — ver "
                      "Angulo & Lessa (1997) e a réplica de Martin et al. "
-                     "(1998, 2002). Declarar na interface."),
-        "titulo": "Episódio erosivo da Ponta da Baleia",
-        "descricao": ("Erosão do cabo da paleo-Ponta da Baleia, associada à "
-                      "subida rápida do nível relativo do mar. Truncamento "
-                      "datado em 2.344 cal AP (CA96/30)."),
-        "sementes_extra": [],
+                     "(1998, 2002)."),
+        "titulo": "Episódio erosivo da subida rápida do nível do mar de 2.100 cal AP",
+        "descricao": ("O episódio erosivo mais marcante da planície: erosão do "
+                      "cabo da paleo-Ponta da Baleia, associada à subida rápida do "
+                      "nível relativo do mar. Truncamento datado em 2.344 cal AP "
+                      "(CA96/30) e 2.317 cal AP (testemunho 13)."),
     },
     "VI": {
         "figura": "Fig. 14",
-        "idade_rotulo": "~1.300 anos cal AP",
+        "periodo": "Holoceno",
+        "idade_rotulo": "≤ 1.300 anos cal AP",
         "idade_ordem": 1_300,
         "nmrm_m": None,
-        "nmrm_obs": "sem cota atribuída; idade máxima dada por CA96-11/70 cm.",
-        "titulo": "Erosão severa da Ilha de Caçumba",
-        "descricao": ("Deslocamento do canal de Caravelas e erosão da Ilha de "
-                      "Caçumba."),
-        "sementes_extra": [],
+        "nmrm_obs": ("nível relativo descendo do 3º máximo rumo à posição atual; "
+                     "sem cota atribuída. 1.290 cal AP (CA96-11/70 cm) é idade "
+                     "MÁXIMA da paleogeografia."),
+        "titulo": "Erosão costeira severa na Ilha de Caçumba",
+        "descricao": ("A intensificação da deriva litorânea para sul desloca o "
+                      "canal de Caravelas, o que explicaria a erosão severa da Ilha "
+                      "de Caçumba. O paleocanal é sugerido pelas fácies de canal de "
+                      "maré do testemunho 10."),
     },
     "VII": {
         "figura": "Fig. 15",
-        "idade_rotulo": "atual",
-        "idade_ordem": 0,
-        "nmrm_m": 0.0,
-        "nmrm_obs": "configuração atual, nível de referência.",
-        "titulo": "Progradação recente",
-        "descricao": ("Crescimento da Ponta da Baleia e instalação das planícies "
-                      "de maré extensas — sedimentação dominada por maré."),
-        "sementes_extra": [],
+        "periodo": "Holoceno",
+        "idade_rotulo": "< 1.300 anos cal AP",
+        "idade_ordem": 1_000,
+        "nmrm_m": None,
+        "nmrm_obs": ("nível relativo descendo do 3º máximo rumo à posição atual; "
+                     "sem cota atribuída. Planícies de maré datadas em ~700–500 cal "
+                     "AP e chênieres em ~800–300 cal AP; borda do recife de Coroa "
+                     "Vermelha em 1.540 cal AP."),
+        "titulo": "Retomada da progradação da linha de costa",
+        "descricao": ("Último estágio do modelo. O crescimento da Ponta da Baleia "
+                      "e a emersão dos recifes de Sebastião Gomes, Coroa Vermelha e "
+                      "Viçosa criam uma zona de baixa energia junto à Ilha de "
+                      "Caçumba, com planícies de maré extensas: a sedimentação "
+                      "passa a ser dominada pela maré."),
     },
 }
 
@@ -245,8 +305,7 @@ FONTE_ARTIGO = ("Andrade ACS, Dominguez JML, Martin L, Bittencourt ACSP (2003). 
 # GEODÉSIA (numpy, sem pyproj)
 # =============================================================================
 # Espelha as funções de 09_limite_turma.py. Duplicadas de propósito: os dois
-# scripts de geração são independentes e o 09 está estável — refatorar para um
-# src/geodesia.py comum é limpeza futura, não tarefa desta entrega.
+# scripts de geração são independentes e o 09 está estável.
 
 def _area_anel_km2(coords) -> float:
     """
@@ -254,7 +313,6 @@ def _area_anel_km2(coords) -> float:
     esférico (Chamberlain & Duquette, 2007):
         A = R²/2 · |Σ (λ2-λ1)(2 + sen φ1 + sen φ2)|
     A esfera erra ~0,3 % contra o elipsoide — serve para AFERIR, não publicar.
-    (E aqui isso é o menor dos erros: o georreferenciamento erra bem mais.)
     """
     c = np.asarray(coords, dtype=float)
     lon, lat = np.radians(c[:, 0]), np.radians(c[:, 1])
@@ -286,237 +344,316 @@ def partes(geom) -> list:
         return []
     if geom.geom_type == "Polygon":
         return [geom]
-    return [p for g in geom.geoms for p in partes(g)]
+    if hasattr(geom, "geoms"):
+        return [p for g in geom.geoms for p in partes(g)]
+    return []
+
+
+def _linhas(geom) -> list:
+    """Lista de LineStrings de uma geometria qualquer (descarta pontos)."""
+    if geom.is_empty:
+        return []
+    if geom.geom_type == "LineString":
+        return [geom]
+    if hasattr(geom, "geoms"):
+        return [l for g in geom.geoms for l in _linhas(g)]
+    return []
+
+
+def _m(graus: float) -> float:
+    """Graus -> metros, só para mensagem de log."""
+    return graus * CONFIG_PALEO["km_por_grau"] * 1000.0
 
 
 # =============================================================================
 # LEITURA E CONFERÊNCIA
 # =============================================================================
 
-def conferir_prj(caminho: Path) -> None:
+def conferir_prj(caminho) -> None:
     """
     O .prj precisa ser geográfico (graus). Um shapefile projetado passaria sem
-    erro de sintaxe e sairia com METROS dentro de um GeoJSON rotulado em graus
-    — engano que só aparece quando o mapa fica vazio. Mesma conferência do 09.
+    erro de sintaxe e sairia com METROS dentro de um GeoJSON rotulado em graus.
     """
     if not caminho.exists():
         print(f"[PRJ] AVISO: {caminho.name} não existe. Seguindo sob a suposição de "
               "coordenadas geográficas — confira a camada no QGIS.")
         return
     wkt = caminho.read_text(encoding="utf-8", errors="replace")
-    print(f"[PRJ] {wkt.strip()[:110]}...")
     if "PROJCS" in wkt.upper():
-        print("[PRJ] PARADO: a camada está PROJETADA (PROJCS). Este pipeline espera "
-              "coordenadas geográficas em graus. No QGIS, salve a camada como "
-              "EPSG:4326 e rode de novo. Nada foi gravado.")
+        print(f"[PRJ] PARADO: {caminho.name} está PROJETADO (PROJCS). Este pipeline "
+              "espera coordenadas geográficas em graus. No QGIS, salve a camada "
+              "como EPSG:4326 e rode de novo. Nada foi gravado.")
         sys.exit(1)
 
 
-def ler_linhas(base: Path) -> dict:
+def ler_linhas(base) -> list:
     """
-    Lê o shapefile de linhas e agrupa por estágio.
-    Devolve {estagio: [LineString, ...]} — lista porque um estágio pode ter
-    mais de uma linha (costa oceânica + margem lagunar, no Estágio II).
+    Lê o shapefile de linhas de UM estágio. Devolve a lista de LineStrings
+    (MultiLineString é explodida). Para se a camada não for de linhas.
     """
     import shapefile
     from shapely.geometry import shape
 
     leitor = shapefile.Reader(str(base))
-    campos = [f[0] for f in leitor.fields[1:]]
     print(f"[LEITURA] {base.name}.shp | shapeType={leitor.shapeType} | "
-          f"feições={len(leitor)} | campos={campos}")
-    print(f"[LEITURA] bbox do arquivo: "
-          f"lon [{leitor.bbox[0]:.4f}, {leitor.bbox[2]:.4f}] "
+          f"feições={len(leitor)} | lon [{leitor.bbox[0]:.4f}, {leitor.bbox[2]:.4f}] "
           f"lat [{leitor.bbox[1]:.4f}, {leitor.bbox[3]:.4f}]")
-
-    campo = CONFIG_PALEO["campo_estagio"]
-    if campo not in campos:
-        print(f"[LEITURA] PARADO: o shapefile não tem o campo '{campo}'. Crie-o no "
-              f"QGIS (texto, comprimento 5) e preencha com o número romano do "
-              f"estágio (I, II, ... VII). Campos encontrados: {campos}. "
-              "Nada foi gravado.")
+    if len(leitor) == 0:
+        print(f"[LEITURA] PARADO: {base.name}.shp não tem feição nenhuma. (Armadilha "
+              "conhecida: exportar do QGIS com 'Salvar apenas feições "
+              "selecionadas' marcado e nada selecionado.) Nada foi gravado.")
         sys.exit(1)
 
-    por_estagio: dict = {}
-    for i, (forma, registro) in enumerate(zip(leitor.shapes(), leitor.records())):
+    linhas = []
+    for i, forma in enumerate(leitor.shapes()):
         geom = shape(forma.__geo_interface__)
         if geom.geom_type not in ("LineString", "MultiLineString"):
-            print(f"[LEITURA] PARADO: feição {i} é {geom.geom_type}, não linha. Esta "
-                  "camada é de LINHAS — o polígono é fechado aqui pelo script. "
-                  "Nada foi gravado.")
+            print(f"[LEITURA] PARADO: feição {i} de {base.name} é {geom.geom_type}, "
+                  "não linha. Esta camada é de LINHAS — o polígono é fechado aqui "
+                  "pelo script. Nada foi gravado.")
             sys.exit(1)
-
-        est = str(registro[campo]).strip().upper()
-        if est not in ESTAGIOS:
-            print(f"[LEITURA] PARADO: feição {i} tem estagio='{est}', que não está em "
-                  f"ESTAGIOS ({list(ESTAGIOS)}). Corrija o atributo no QGIS. "
-                  "Nada foi gravado.")
-            sys.exit(1)
-
-        pecas = [geom] if geom.geom_type == "LineString" else list(geom.geoms)
-        por_estagio.setdefault(est, []).extend(pecas)
-        print(f"[LEITURA] feição {i} -> estágio {est} | {geom.geom_type} | "
-              f"{sum(len(p.coords) for p in pecas)} vértices")
-
-    return por_estagio
+        linhas.extend(_linhas(geom))
+    return linhas
 
 
 # =============================================================================
-# FECHAMENTO DO POLÍGONO
+# PREPARO DAS LINHAS: moldura, pontas, costura
 # =============================================================================
 
-def estender_pontas(linha, extra: float):
+def _prolonga(p_dentro, p_ponta, extra: float):
+    """Ponto `extra` graus além de `p_ponta`, na direção p_dentro -> p_ponta."""
+    dx, dy = p_ponta[0] - p_dentro[0], p_ponta[1] - p_dentro[1]
+    n = math.hypot(dx, dy)
+    if n == 0:
+        return tuple(p_ponta)
+    return (p_ponta[0] + dx / n * extra, p_ponta[1] + dy / n * extra)
+
+
+def preparar_linhas(linhas, quadro, est: str) -> list:
     """
-    Prolonga o primeiro e o último segmento da linha, na mesma direção, por
-    `extra` graus. Serve para garantir que a linha atravesse o quadro de lado a
-    lado mesmo que o traçado tenha parado um pouco antes da borda. O excedente
-    é cortado pelo quadro em seguida, então isto não inventa geometria dentro
-    da área de análise — só fecha a topologia.
+    Passos 1 e 2 do cabeçalho: tira a moldura redesenhada, fecha os anéis quase
+    fechados, prolonga as pontas que encostam na borda e costura as frestas.
+    Devolve a lista de LineStrings prontas para o corte.
     """
-    from shapely.geometry import LineString
+    from shapely.geometry import LineString, Point
+    from shapely.ops import nearest_points, unary_union
 
-    coords = list(linha.coords)
-    if len(coords) < 2:
-        return linha
-    # Anel fechado (ilha) não tem ponta para prolongar — e prolongar criaria
-    # duas farpas saindo do anel. Devolve intacto.
-    if coords[0] == coords[-1]:
-        return linha
+    cfg = CONFIG_PALEO
+    margem = cfg["margem_borda_graus"]
+    tol = cfg["tol_costura_graus"]
+    miolo = quadro.buffer(-margem, join_style=2)       # quadro encolhido, canto reto
 
-    def _prolonga(p_dentro, p_ponta):
-        dx, dy = p_ponta[0] - p_dentro[0], p_ponta[1] - p_dentro[1]
-        n = math.hypot(dx, dy)
-        if n == 0:
-            return p_ponta
-        return (p_ponta[0] + dx / n * extra, p_ponta[1] + dy / n * extra)
+    # 1. Moldura fora: só sobrevive o que está a mais de `margem` da borda.
+    trechos = []
+    for l in linhas:
+        trechos.extend(t for t in _linhas(l.intersection(miolo))
+                       if t.length > cfg["ultrapassa_costura_graus"])
+    print(f"[MOLDURA {est}] {len(linhas)} linha(s) -> {len(trechos)} trecho(s) "
+          f"fora da faixa de {_m(margem):.0f} m da borda")
 
-    novo = ([_prolonga(coords[1], coords[0])]
-            + coords
-            + [_prolonga(coords[-2], coords[-1])])
-    return LineString(novo)
+    # Anel quase fechado (contorno de ilha) é fechado aqui — antes da costura,
+    # senão a ponta procuraria outra linha em vez de si mesma.
+    abertos = set()
+    for k, t in enumerate(trechos):
+        c = list(t.coords)
+        gap = Point(c[0]).distance(Point(c[-1]))
+        if c[0] != c[-1] and gap < tol and t.length > 3 * tol:
+            trechos[k] = LineString(c + [c[0]])
+            if gap > cfg["ultrapassa_costura_graus"]:
+                print(f"[ANEL {est}] trecho {k} fechado (fresta de {_m(gap):.0f} m)")
+        elif c[0] != c[-1]:
+            abertos.add(k)
 
-
-def alertar_pontas(linhas, quadro_bounds) -> None:
-    """
-    Avisa se alguma ponta da linha digitalizada ficou longe da borda do quadro.
-    Não para o script (a extensão costuma resolver), mas traçado incompleto é a
-    causa número um de polígono estranho — melhor o aviso aparecer no log do
-    que a área sair errada em silêncio.
-    """
-    lon_min, lat_min, lon_max, lat_max = quadro_bounds
-    tol = CONFIG_PALEO["tol_alerta_ponta_graus"]
-    for k, linha in enumerate(linhas):
-        # Anel fechado é ilha: não deve mesmo encostar em borda nenhuma.
-        if linha.coords[0] == linha.coords[-1]:
-            print(f"[PONTA] linha {k} é anel fechado (ilha) — sem ponta a conferir.")
+    # 2. Pontas — uma decisão por ponta: (a) junto à borda -> prolonga até
+    # cruzar; (b) solta -> costura na linha mais próxima (outra, ou a própria
+    # longe da ponta); (c) longe de tudo -> avisa e deixa como está.
+    prontos = []
+    for k, t in enumerate(trechos):
+        c = list(t.coords)
+        if k not in abertos:
+            prontos.append(t)
             continue
-        for rotulo, (x, y) in (("inicial", linha.coords[0]),
-                               ("final", linha.coords[-1])):
-            d = min(abs(x - lon_min), abs(x - lon_max),
-                    abs(y - lat_min), abs(y - lat_max))
-            if d > tol:
-                print(f"[PONTA] AVISO: linha {k}, ponta {rotulo} em "
-                      f"({x:.4f}, {y:.4f}) está a {d:.4f}° (~{d * 111:.1f} km) da "
-                      "borda mais próxima do quadro. Confira se o traçado ficou "
-                      "incompleto no QGIS.")
+        for lado in (0, -1):
+            p = Point(c[lado])
+            vizinho = c[1] if lado == 0 else c[-2]
+            novo = None
+            if quadro.exterior.distance(p) < 1.5 * margem:
+                novo = _prolonga(vizinho, c[lado], cfg["extensao_borda_graus"])
+            else:
+                resto = c[3:] if lado == 0 else c[:-3]
+                outros = [o for j, o in enumerate(trechos) if j != k]
+                if len(resto) > 1:
+                    outros.append(LineString(resto))
+                alvo = unary_union(outros) if outros else None
+                d = p.distance(alvo) if alvo is not None else float("inf")
+                if d < tol:
+                    q = nearest_points(p, alvo)[1]
+                    novo = _prolonga(c[lado], (q.x, q.y),
+                                     cfg["ultrapassa_costura_graus"])
+                    if d > cfg["ultrapassa_costura_graus"]:
+                        print(f"[COSTURA {est}] trecho {k}, ponta "
+                              f"{'inicial' if lado == 0 else 'final'}: fresta de "
+                              f"{_m(d):.0f} m costurada em ({q.x:.4f}, {q.y:.4f})")
+                else:
+                    print(f"[COSTURA {est}] AVISO: trecho {k}, ponta em "
+                          f"({p.x:.4f}, {p.y:.4f}) está a {_m(d):.0f} m da linha mais "
+                          "próxima — acima da tolerância, NÃO costurada. Confira "
+                          "no QGIS se o contorno ficou aberto.")
+            if novo is not None:
+                c = [novo] + c if lado == 0 else c + [novo]
+        prontos.append(LineString(c))
+    return prontos
+
+
+# =============================================================================
+# CORTE E CLASSIFICAÇÃO
+# =============================================================================
+
+def _vizinhanca(pecas) -> dict:
+    """{i: {j: comprimento da fronteira comum}} entre as peças do corte."""
+    from shapely.strtree import STRtree
+
+    arvore = STRtree(pecas)
+    viz = {i: {} for i in range(len(pecas))}
+    for i, a in enumerate(pecas):
+        for j in arvore.query(a):
+            j = int(j)
+            if j <= i:
+                continue
+            comum = a.boundary.intersection(pecas[j].boundary).length
+            if comum > 0:
+                viz[i][j] = comum
+                viz[j][i] = comum
+    return viz
+
+
+def _colorir(n: int, viz: dict, semente: int, permitidas: set) -> list:
+    """BFS de 2-coloração: 0 = mar, 1 = terra. Só anda por `permitidas`."""
+    cor = [None] * n
+    cor[semente] = 0
+    fila = deque([semente])
+    while fila:
+        i = fila.popleft()
+        for j in viz[i]:
+            if j in permitidas and cor[j] is None:
+                cor[j] = 1 - cor[i]
+                fila.append(j)
+    return cor
 
 
 def terra_do_estagio(linhas, est: str):
     """
-    Fecha as linhas do estágio contra o quadro e devolve (terra, pecas_debug).
+    Fecha as linhas do estágio e devolve (terra, pecas_debug).
 
-    `pecas_debug` é a lista [(Polygon, classe)] de TODAS as peças do corte, com
-    a classificação de cada uma — gravada em saidas/ para inspeção no QGIS
-    quando o resultado não bater com o esperado.
+    `pecas_debug` é a lista [(Polygon, classe)] de TODAS as peças do corte,
+    gravada em saidas/ para inspeção no QGIS quando o resultado não bater.
     """
-    from shapely.geometry import box, LineString, Point
-    from shapely.ops import polygonize, unary_union
+    from shapely.geometry import Point, box
+    from shapely.ops import polygonize_full, unary_union
 
     cfg = CONFIG_PALEO
     b = cfg["bbox_figura"]
     quadro = box(b["lon_min"], b["lat_min"], b["lon_max"], b["lat_max"])
 
-    alertar_pontas(linhas, (b["lon_min"], b["lat_min"], b["lon_max"], b["lat_max"]))
+    prontas = preparar_linhas(linhas, quadro, est)
 
-    estendidas = [estender_pontas(l, cfg["extensao_pontas_graus"]) for l in linhas]
+    # 3. Corte. unary_union NODA os cruzamentos, que é o que polygonize exige.
+    rede = unary_union([quadro.exterior] + prontas)
+    faces, cortes, soltas, _ = polygonize_full(rede)
+    dentro = quadro.buffer(-cfg["margem_borda_graus"])
+    solta_km = sum(_m(g.intersection(dentro).length)
+                   for g in _linhas(cortes) + _linhas(soltas)) / 1000
+    if solta_km > cfg["alerta_solta_km"]:
+        print(f"[CORTE {est}] AVISO: {solta_km:.1f} km de linha não fecham peça "
+              "nenhuma (contorno aberto). A peça dos dois lados dessa linha é a "
+              f"MESMA — abra {cfg['arq_debug'].name} no QGIS.")
 
-    # A rede a cortar: contorno do quadro + linhas. unary_union NODA os
-    # cruzamentos, que é o que polygonize exige para fechar anéis.
-    rede = unary_union([quadro.exterior] + estendidas)
-    brutas = [p for p in polygonize(rede) if p.intersects(quadro)]
-    # Recorta ao quadro: a extensão das pontas cria apêndices do lado de fora.
-    # `partes` achata o resultado — uma interseção pode devolver MultiPolygon.
     pecas = []
-    for p in brutas:
-        pecas.extend(partes(p.intersection(quadro)))
-    pecas = [p for p in pecas if not p.is_empty and p.area > 0]
+    for f in getattr(faces, "geoms", []):
+        pecas.extend(p for p in partes(f.intersection(quadro)) if p.area > 0)
 
     if len(pecas) < 2:
-        print(f"[FECHAR {est}] PARADO: o corte devolveu {len(pecas)} peça(s). A linha "
-              "não atravessou o quadro de lado a lado — no QGIS, prolongue o "
-              "traçado até (ou além de) as bordas norte e sul. Nada foi gravado.")
+        print(f"[CORTE {est}] PARADO: o corte devolveu {len(pecas)} peça(s) — as "
+              "linhas não separam terra de mar. Nada foi gravado.")
         sys.exit(1)
 
-    # Conferência de fechamento: as peças do corte têm que reconstituir o quadro
-    # inteiro, sem sobra nem falta. É barata e pega de uma vez erro de nodação,
-    # peça perdida no recorte e bug na conta de área esférica — qualquer um dos
-    # três faria a área do estágio sair errada em silêncio.
     soma = sum(area_km2(p) for p in pecas)
     quadro_km2 = area_km2(quadro)
     desvio = abs(soma - quadro_km2)
-    print(f"[FECHAR {est}] {len(pecas)} peça(s) | soma {soma:,.1f} km² vs quadro "
+    print(f"[CORTE {est}] {len(pecas)} peça(s) | soma {soma:,.1f} km² vs quadro "
           f"{quadro_km2:,.1f} km² (Δ {desvio:,.3f} km²)")
     if desvio > cfg["tol_fechamento_km2"]:
-        print(f"[FECHAR {est}] PARADO: as peças não reconstituem o quadro (Δ "
-              f"{desvio:,.2f} km², acima de {cfg['tol_fechamento_km2']:.1f} km²). "
-              "Isso indica geometria quebrada — provavelmente linha auto-"
-              "interceptante. Conserte no QGIS. Nada foi gravado.")
+        print(f"[CORTE {est}] PARADO: as peças não reconstituem o quadro (Δ "
+              f"{desvio:,.2f} km²). Geometria quebrada — provavelmente linha "
+              "auto-interceptante. Conserte no QGIS. Nada foi gravado.")
         sys.exit(1)
 
-    # ---- Classificação -------------------------------------------------------
-    # O continente é a peça que CONTÉM a âncora. Ilhas destacadas entram por
-    # ponto-semente. Ver a nota em CONFIG_PALEO["ancora_continente"] para o
-    # motivo de não ser "a peça que encosta na borda oeste".
-    ancora = Point(*(ESTAGIOS[est].get("ancora") or cfg["ancora_continente"]))
-    sementes = [Point(x, y) for x, y in ESTAGIOS[est]["sementes_extra"]]
-    print(f"[FECHAR {est}] âncora do continente em "
-          f"({ancora.x:.4f}, {ancora.y:.4f})"
-          + (f" | {len(sementes)} ponto(s)-semente" if sementes else ""))
+    # 4. Classe. Primeiro só entre peças GRANDES: lasca em junção de três
+    # linhas cria ciclo ímpar e contaminaria a paridade. O que não for
+    # alcançado assim entra numa segunda passada pela malha toda.
+    areas = [area_km2(p) for p in pecas]
+    viz = _vizinhanca(pecas)
+    grandes = {i for i, a in enumerate(areas) if a >= cfg["area_min_lasca_km2"]}
 
-    terras, debug = [], []
-    for k, p in enumerate(sorted(pecas, key=lambda g: -g.area)):
-        por_ancora = ancora.within(p)
-        por_semente = any(s.within(p) for s in sementes)
-        eh_terra = por_ancora or por_semente
-
-        motivo = ("âncora" if por_ancora else
-                  "ponto-semente" if por_semente else "—")
-        print(f"[PECA {est}.{k}] {area_km2(p):9,.1f} km² | "
-              f"{'TERRA' if eh_terra else 'mar  '} ({motivo})")
-
-        debug.append((p, "terra" if eh_terra else "mar"))
-        if eh_terra:
-            terras.append(p)
-
-    if not terras:
-        print(f"[FECHAR {est}] PARADO: a âncora ({ancora.x:.4f}, {ancora.y:.4f}) não "
-              "caiu dentro de nenhuma peça — provavelmente está exatamente sobre a "
-              "paleolinha ou fora do quadro. Ajuste "
-              f"ESTAGIOS['{est}']['ancora'] ou CONFIG_PALEO['ancora_continente']. "
+    mar_pt = Point(*cfg["ponto_mar"])
+    semente = next((i for i, p in enumerate(pecas) if p.contains(mar_pt)), None)
+    if semente is None:
+        print(f"[CLASSE {est}] PARADO: o ponto_mar {cfg['ponto_mar']} não caiu em "
+              "peça nenhuma (está sobre uma linha?). Ajuste CONFIG_PALEO. "
               "Nada foi gravado.")
         sys.exit(1)
+    grandes.add(semente)
 
-    terra = unary_union(terras).buffer(0)
+    cor = _colorir(len(pecas), viz, semente, grandes)
+    if any(cor[i] is None for i in grandes):
+        completa = _colorir(len(pecas), viz, semente, set(range(len(pecas))))
+        for i in grandes:
+            if cor[i] is None:
+                cor[i] = completa[i]
 
-    # Guarda-costas: terra = quadro inteiro significa que não sobrou mar, o que
-    # nunca é verdade num mapa de linha de costa. Peguei este caso na marra —
-    # a regra antiga da borda oeste devolvia exatamente isso quando a linha
-    # saía pela própria borda oeste.
+    # Lascas: herdam da vizinha grande de maior fronteira comum (ou, sem
+    # vizinha grande, da maior já classificada).
+    n_lascas = 0
+    for i in sorted(range(len(pecas)), key=lambda k: -areas[k]):
+        if i in grandes:
+            continue
+        opcoes = ([(comp, j) for j, comp in viz[i].items() if j in grandes]
+                  or [(comp, j) for j, comp in viz[i].items() if cor[j] is not None])
+        cor[i] = cor[max(opcoes)[1]] if opcoes else 0
+        n_lascas += 1
+
+    conflitos = [(i, j, comp) for i in grandes for j, comp in viz[i].items()
+                 if j in grandes and j > i and cor[i] == cor[j]]
+    print(f"[CLASSE {est}] semente do mar na peça {semente} | {len(grandes)} peça(s) "
+          f"grandes, {n_lascas} lasca(s) < {cfg['area_min_lasca_km2']} km² absorvidas "
+          f"| conflitos: {len(conflitos)}")
+    if conflitos:
+        for i, j, comp in conflitos[:5]:
+            pt = pecas[i].boundary.intersection(pecas[j].boundary).centroid
+            print(f"[CLASSE {est}]   peças {i} e {j} com a mesma classe dos dois lados "
+                  f"de {_m(comp):.0f} m de linha, perto de ({pt.x:.4f}, {pt.y:.4f})")
+        print(f"[CLASSE {est}] PARADO: linha que não separa terra de água (traçado "
+              "duplicado ou contorno de unidade geológica em vez de costa). "
+              "Conserte no QGIS. Nada foi gravado.")
+        sys.exit(1)
+
+    for k, (p, c) in enumerate(sorted(zip(pecas, cor), key=lambda t: -t[0].area)[:8]):
+        print(f"[PECA {est}.{k}] {area_km2(p):9,.2f} km² | {'TERRA' if c else 'mar'}")
+
+    terra = unary_union([p for p, c in zip(pecas, cor) if c == 1]).buffer(0)
+    debug = [(p, "terra" if c == 1 else "mar") for p, c in zip(pecas, cor)]
+
+    # 5. Conferências de sentido.
+    if not terra.contains(Point(*cfg["ponto_continente"])):
+        print(f"[CLASSE {est}] PARADO: o ponto_continente {cfg['ponto_continente']} "
+              "(Tabuleiros do Barreiras) saiu MAR. A paridade inverteu — há linha "
+              "aberta ou duplicada entre o mar e o continente. Abra "
+              f"{cfg['arq_debug'].name} no QGIS. Nada foi gravado.")
+        sys.exit(1)
     frac = area_km2(terra) / quadro_km2
     if frac > cfg["frac_terra_max"]:
-        print(f"[FECHAR {est}] PARADO: a terra ficou com {100 * frac:.1f}% do quadro — "
-              "não sobrou mar. A classificação falhou; confira a âncora e abra "
-              f"{cfg['arq_debug'].name} no QGIS. Nada foi gravado.")
+        print(f"[CLASSE {est}] PARADO: a terra ficou com {100 * frac:.1f}% do "
+              "quadro — não sobrou mar. Nada foi gravado.")
         sys.exit(1)
 
     return terra, debug
@@ -535,24 +672,21 @@ def main() -> int:
     b = cfg["bbox_figura"]
     print(f"[QUADRO] Figs. 9–15 de Andrade et al. (2003): "
           f"lon [{b['lon_min']}, {b['lon_max']}] lat [{b['lat_min']}, {b['lat_max']}]")
-    print("[QUADRO] lembrete: este quadro é MENOR que config.BBOX_WGS84. A camada "
-          "paleo só vale dentro dele — fora, o artigo não desenhou nada.")
 
     dir_fonte = cfg["dir_saida"] / cfg["subdir_fonte"]
-    base = dir_fonte / cfg["arq_fonte"]
-    if not base.with_suffix(".shp").exists():
-        print(f"[PALEO] PARADO: {base}.shp não encontrado. Digitalize as paleolinhas "
-              "no QGIS (camada de LINHA, EPSG:4326, campo de texto 'estagio') e "
-              "salve nesse caminho. Nada foi gravado.")
+    disponiveis = {}
+    for est in ESTAGIOS:
+        base = dir_fonte / cfg["padrao_fonte"].format(est=est)
+        if base.with_suffix(".shp").exists():
+            disponiveis[est] = base
+    if not disponiveis:
+        print(f"[PALEO] PARADO: nenhum shapefile em {dir_fonte} com o padrão "
+              f"{cfg['padrao_fonte'].format(est='<I..VII>')}.shp. Nada foi gravado.")
         return 1
-
-    conferir_prj(base.with_suffix(".prj"))
-    por_estagio = ler_linhas(base)
-
-    faltando = [e for e in ESTAGIOS if e not in por_estagio]
+    faltando = [e for e in ESTAGIOS if e not in disponiveis]
     if faltando:
-        print(f"[PALEO] estágios ainda não digitalizados: {faltando} — o produto sai "
-              "só com os que existem, e o app mostra só esses.")
+        print(f"[PALEO] estágios sem shapefile: {faltando} — o produto sai só com "
+              "os que existem, e o app mostra só esses.")
 
     feicoes, debug_total = [], []
     nd = cfg["casas_coord"]
@@ -562,18 +696,22 @@ def main() -> int:
             return [_arredonda(x) for x in o]
         return round(float(o), nd)
 
-    # Ordem cronológica (mais antigo primeiro) — é a ordem do slider da interface.
-    for est in sorted(por_estagio, key=lambda e: -ESTAGIOS[e]["idade_ordem"]):
+    # Ordem cronológica (mais antigo primeiro) — é a ordem do slider.
+    for est in sorted(disponiveis, key=lambda e: -ESTAGIOS[e]["idade_ordem"]):
         meta = ESTAGIOS[est]
+        base = disponiveis[est]
         print(f"\n[ESTAGIO {est}] {meta['titulo']} — {meta['idade_rotulo']} "
               f"({meta['figura']})")
+        conferir_prj(base.with_suffix(".prj"))
+        linhas = ler_linhas(base)
 
-        terra, debug = terra_do_estagio(por_estagio[est], est)
+        terra, debug = terra_do_estagio(linhas, est)
         debug_total.extend((p, est, classe) for p, classe in debug)
 
         pecas = partes(terra)
         km2 = area_km2(terra)
-        n_vert = sum(len(p.exterior.coords) for p in pecas)
+        n_vert = sum(len(p.exterior.coords) + sum(len(f.coords) for f in p.interiors)
+                     for p in pecas)
         print(f"[ESTAGIO {est}] TERRA EMERSA: {km2:,.1f} km² | {len(pecas)} parte(s) | "
               f"{n_vert} vértices | válido={terra.is_valid}")
 
@@ -583,6 +721,7 @@ def main() -> int:
             "properties": {
                 "estagio":       est,
                 "titulo":        meta["titulo"],
+                "periodo":       meta["periodo"],
                 "idade_rotulo":  meta["idade_rotulo"],
                 "idade_ordem":   meta["idade_ordem"],
                 "nmrm_m":        meta["nmrm_m"],
@@ -592,12 +731,14 @@ def main() -> int:
                 "area_km2_aprox_esferica": round(km2, 1),
                 "n_partes":      len(pecas),
                 "n_vertices":    n_vert,
-                "metodo": ("linha de costa digitalizada no QGIS sobre a figura "
-                           "georreferenciada; polígono fechado contra o quadro da "
-                           "figura por 10_paleolinhas.py"),
+                "arquivo_fonte": f"{cfg['subdir_fonte']}/{base.name}.shp",
+                "metodo": ("linhas terra/água digitalizadas pela turma no QGIS sobre "
+                           "a figura georreferenciada; polígono fechado contra o "
+                           "quadro da figura por 2-coloração (cada linha troca "
+                           "terra/água), em 10_paleolinhas.py"),
                 "precisao": ("RECONSTRUÇÃO redesenhada, não medição. Erro posicional "
                              "da ordem de centenas de metros (figura de 2003 "
-                             "escaneada, georreferenciada por 4 pontos de controle). "
+                             "escaneada e georreferenciada por pontos de controle). "
                              "Use para comparar estágios entre si, não como medida "
                              "absoluta."),
                 "fonte":         FONTE_ARTIGO,
@@ -631,8 +772,6 @@ def main() -> int:
           f"{len(feicoes)} estágio(s)")
 
     # ---- Gravação do debug ---------------------------------------------------
-    # Todas as peças do corte, com a classe de cada uma. Abra no QGIS quando o
-    # polígono não sair como o esperado: quase sempre a resposta está aqui.
     cfg["arq_debug"].parent.mkdir(parents=True, exist_ok=True)
     dbg = {
         "type": "FeatureCollection",
@@ -641,7 +780,7 @@ def main() -> int:
         "features": [{
             "type": "Feature",
             "properties": {"estagio": est, "classe": classe,
-                           "area_km2": round(area_km2(p), 2)},
+                           "area_km2": round(area_km2(p), 3)},
             "geometry": {"type": mapping(p)["type"],
                          "coordinates": _arredonda(mapping(p)["coordinates"])},
         } for p, est, classe in debug_total],
@@ -652,15 +791,13 @@ def main() -> int:
           "se a classificação terra/mar não bater com o esperado.")
 
     # ---- Resumo comparativo --------------------------------------------------
-    if len(feicoes) > 1:
-        print("\n[RESUMO] terra emersa por estágio (dentro do quadro da figura):")
-        for f_ in feicoes:
-            p = f_["properties"]
-            print(f"  {p['estagio']:>4}  {p['idade_rotulo']:>22}  "
-                  f"{p['area_km2_aprox_esferica']:9,.1f} km²")
-        print("[RESUMO] km² arredondados para comparação entre estágios. Não cite "
-              "como medida absoluta — ver 'precisao' nas propriedades.")
-
+    print("\n[RESUMO] terra emersa por estágio (dentro do quadro da figura):")
+    for f_ in feicoes:
+        p = f_["properties"]
+        print(f"  {p['estagio']:>4}  {p['idade_rotulo']:>22}  "
+              f"{p['area_km2_aprox_esferica']:9,.1f} km²  ({p['n_partes']} parte(s))")
+    print("[RESUMO] km² para comparação entre estágios. Não cite como medida "
+          "absoluta — ver 'precisao' nas propriedades.")
     return 0
 
 

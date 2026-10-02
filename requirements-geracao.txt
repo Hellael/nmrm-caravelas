@@ -7,7 +7,7 @@
 # 09_limite_turma.py           -> dados_web/limite_turma.geojson
 #   (converte dados_web/fonte_limite_turma/*.shp, versionado junto)
 # 10_paleolinhas.py            -> dados_web/paleolinhas_turma.geojson
-#   (converte dados_web/fonte_paleolinhas/*.shp, versionado junto)
+#   (converte dados_web/fonte_paleolinhas/estagios/*.shp, versionado junto)
 shapely>=2.0
 pyshp>=2.3
 #
