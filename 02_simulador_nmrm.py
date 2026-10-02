@@ -42,6 +42,7 @@ import config
 import src.cobertura as cob
 import src.fonte_dados as fonte
 import src.mapa_web as mapaweb
+import src.paleo as paleo
 import src.slr_core as core
 
 # Resolve a fonte de dados UMA vez: modo local (dados completos em
@@ -249,6 +250,50 @@ def _recorte_mascara(caminho: str, dir_dados: str):
 def _recorte_de(caminho: str, usar: bool):
     """Máscara do recorte se `usar`, senão None (modo Livre = domínio inteiro)."""
     return _recorte_mascara(caminho, _DIR_WEB) if usar else None
+
+
+# ---- Paleoambiente (v2.1) ---------------------------------------------------
+# Toda a ciência vive em `src/paleo.py` (regra da separação motor/interface);
+# aqui só o cache. Estas máscaras são ESTÁTICAS por dataset — não dependem de
+# cota, de maré nem de cenário —, então são cacheadas por caminho e estágio, e
+# nunca por parâmetro da barra lateral.
+
+@st.cache_resource(show_spinner="Lendo as paleolinhas de costa...")
+def _paleo_geojson(dir_dados: str):
+    """`paleolinhas_turma.geojson`, ou None se não existir — a aba então nem
+    aparece. Sem arquivo é ausência de funcionalidade, nunca exceção."""
+    return paleo.carregar_paleolinhas(
+        os.path.join(dir_dados, paleo.CONFIG_PALEO["arquivo"]))
+
+
+@st.cache_resource(show_spinner="Rasterizando o quadro das figuras do artigo...")
+def _paleo_quadro(caminho: str, dir_dados: str):
+    """Máscara do quadro 39°30'–39°00'W x 17°30'–18°00'S na grade do MDE. É
+    MENOR que o domínio do simulador: fora dele o artigo não desenhou nada, e
+    contar a terra de hoje no domínio inteiro contra um polígono que só cobre o
+    quadro daria assimetria de recorte lida como progradação."""
+    gj = _paleo_geojson(dir_dados)
+    return None if gj is None else paleo.mascara_quadro(core, gj, _carregar(caminho))
+
+
+@st.cache_resource(show_spinner="Comparando o estágio com a costa atual...")
+def _paleo_classes(caminho: str, dir_dados: str, estagio: str):
+    """Grade de classes (1=terra nos dois momentos, 2=construída, 3=água hoje)."""
+    gj = _paleo_geojson(dir_dados)
+    d = _carregar(caminho)
+    est = next(e for e in paleo.estagios(gj) if e["estagio"] == estagio)
+    return paleo.classificar(paleo.mascara_estagio(core, est, d),
+                             np.isfinite(d["dem"]),
+                             _paleo_quadro(caminho, dir_dados))
+
+
+@st.cache_resource(show_spinner="Comparando todos os estágios com a costa atual...")
+def _paleo_tabela(caminho: str, dir_dados: str):
+    """Áreas de TODOS os estágios (v2.1) — alimenta a tabela comparativa. Mesma
+    régua de pixel do estágio selecionado, então os números batem com as
+    métricas de cima."""
+    gj = _paleo_geojson(dir_dados)
+    return None if gj is None else paleo.tabela_estagios(core, gj, _carregar(caminho))
 
 
 def _geometria_para_utm(geometria: dict, crs_origem: str = "EPSG:4674") -> dict:
@@ -627,6 +672,11 @@ limiar = _carregar_limiar(caminho_limiar) if caminho_limiar else None
 # pode derrubar a ferramenta.
 caminho_cobertura = FONTE.get("cobertura") or ""
 tem_cobertura = bool(caminho_cobertura and os.path.exists(caminho_cobertura))
+
+# Paleolinhas: versionadas em dados_web/, então valem nos dois modos de uso e
+# nos dois modos de fonte. Ausentes, a aba simplesmente não entra na lista.
+GJ_PALEO = _paleo_geojson(_DIR_WEB)
+tem_paleo = GJ_PALEO is not None
 
 # O raster de limiar (modo web) só é confiável até um teto de cota. Não deixa
 # o slider de NMRM passar disso — além da grade o resultado deixa de ter
@@ -1070,17 +1120,26 @@ if usar_recorte:
 # então a lista é montada antes, e as variáveis de aba são desempacotadas por
 # posição — inclusive `aba_turma = None` no modo Livre, para o bloco de
 # conteúdo mais abaixo saber que não deve desenhar nada.
+# v2.1 — com DUAS abas condicionais (Turma e Paleoambiente), o desempacotamento
+# por posição viraria quatro casos e quebraria na próxima aba opcional. Passou a
+# ser por RÓTULO: `st.tabs` continua recebendo a lista fixa numa chamada só, e o
+# dicionário casa cada rótulo com o seu container. Aba ausente vira None, que é
+# o que os blocos de conteúdo já testam.
 _rotulos_abas = ["🌐 Mapa interativo", "🗺️ Figura (300 dpi)"]
 if CFG_MODO["mostrar_aba_turma"]:
     _rotulos_abas.append("📚 Turma")
+if tem_paleo:
+    _rotulos_abas.append("🕰️ Paleoambiente")
 _rotulos_abas += ["📈 Curva de exposição", "📊 Matriz de cenários", "ℹ️ Metadados"]
 
-_abas = st.tabs(_rotulos_abas)
-if CFG_MODO["mostrar_aba_turma"]:
-    aba_mapa_web, aba_mapa, aba_turma, aba_curva, aba_tabela, aba_meta = _abas
-else:
-    aba_mapa_web, aba_mapa, aba_curva, aba_tabela, aba_meta = _abas
-    aba_turma = None
+_abas = dict(zip(_rotulos_abas, st.tabs(_rotulos_abas)))
+aba_mapa_web = _abas["🌐 Mapa interativo"]
+aba_mapa = _abas["🗺️ Figura (300 dpi)"]
+aba_turma = _abas.get("📚 Turma")
+aba_paleo = _abas.get("🕰️ Paleoambiente")
+aba_curva = _abas["📈 Curva de exposição"]
+aba_tabela = _abas["📊 Matriz de cenários"]
+aba_meta = _abas["ℹ️ Metadados"]
 
 
 def _legenda_html(itens: list, titulo: str) -> str:
@@ -1684,6 +1743,167 @@ if aba_turma is not None:
             "bruto (FABDEM), não desta ferramenta.")
 
 # ---- Curva ------------------------------------------------------------------
+# ---- Paleoambiente ----------------------------------------------------------
+# v2.1 — RECONSTRUÇÃO redesenhada de Andrade et al. (2003), não simulação. Os
+# polígonos vêm das Figs. 9 a 15 georreferenciadas e digitalizadas no QGIS
+# (`10_paleolinhas.py`); a terra de hoje vem do FABDEM. Ver §5 do CLAUDE.md.
+# Consome `dados` e `hs` do bloco de PROCESSAMENTO — nenhum raster é relido.
+if aba_paleo is not None:
+    with aba_paleo:
+        st.markdown(
+            "Os **sete estágios da evolução quaternária** da planície de Caravelas "
+            "segundo Andrade et al. (2003) — do Pleistoceno (Estágio I) ao Holoceno "
+            "tardio (Estágio VII) —, cada um comparado com a terra emersa de hoje. "
+            "A evolução foi controlada pelas variações do nível relativo do mar e "
+            "pelo crescimento dos recifes de Abrolhos. **Reconstrução redesenhada, "
+            "não simulação:** os polígonos são a digitalização das Figs. 9 a 15 do "
+            "artigo, com erro posicional da ordem de centenas de metros; a terra de "
+            "hoje vem do FABDEM a 30 m. Compare estágios entre si — os km² não são "
+            "medida absoluta.")
+
+        _ests = paleo.estagios(GJ_PALEO)
+        if len(_ests) == 1:
+            _est = _ests[0]
+            st.caption(f"Só o Estágio {_est['estagio']} está digitalizado até aqui. "
+                       "O seletor de tempo aparece quando houver mais de um.")
+        else:
+            _rot = {f"{e['estagio']} · {e['idade_rotulo']}": e for e in _ests}
+            _est = _rot[st.select_slider(
+                "Estágio evolutivo", options=list(_rot), value=list(_rot)[0],
+                help="Ordem cronológica, do mais antigo para o mais recente.")]
+
+        _cls_paleo = _paleo_classes(caminho, _DIR_WEB, _est["estagio"])
+        _dentro_paleo = _paleo_quadro(caminho, _DIR_WEB)
+        _stats_paleo = paleo.estatisticas_estagio(
+            _cls_paleo, dados["area_pixel_m2"], _est)
+
+        st.subheader(f"Estágio {_est['estagio']} — {_est['titulo']}")
+        st.caption(" · ".join(x for x in (
+            _est.get("periodo"), _est.get("idade_rotulo"),
+            f"{_est.get('figura', '')} de Andrade et al. (2003)") if x))
+        st.markdown(_est.get("descricao", ""))
+
+        _p1, _p2, _p3, _p4 = st.columns(4)
+        _p1.metric("Terra emersa no estágio",
+                   f"{_stats_paleo['area_terra_paleo_km2']:,.0f} km²")
+        _p2.metric("Terra emersa hoje",
+                   f"{_stats_paleo['area_terra_hoje_km2']:,.0f} km²",
+                   f"{_stats_paleo['variacao_km2']:+,.0f} km² "
+                   f"({_stats_paleo['variacao_pct']:+.1f}%)")
+        _p3.metric("Construída desde então",
+                   f"{_stats_paleo['area_ganho_km2']:,.0f} km²")
+        _p4.metric("Terra então, água hoje",
+                   f"{_stats_paleo['area_perda_km2']:,.0f} km²",
+                   help="Inclui a rede de canais de maré e o estuário atuais — "
+                        "não é, por si, recuo de linha de costa.")
+
+        if _est.get("nmrm_obs"):
+            st.caption(f"**Nível do mar:** {_est['nmrm_obs']}")
+        st.caption(
+            "Áreas contadas em pixel da grade do MDE, dentro do quadro das figuras "
+            "do artigo (39°30'–39°00'W × 17°30'–18°00'S) — menor que o domínio do "
+            "simulador, porque fora dele o artigo não desenhou nada. O polígono "
+            f"deste estágio tem {_stats_paleo['area_poligono_km2']:,.0f} km² por "
+            f"geometria esférica contra "
+            f"{_stats_paleo['area_terra_paleo_km2']:,.0f} km² rasterizados na grade "
+            "de 30 m; a diferença é discretização, não divergência de fonte.")
+
+        st.markdown(_legenda_html(paleo.itens_legenda(_stats_paleo),
+                                  "Comparação com a costa atual"),
+                    unsafe_allow_html=True)
+
+        _uri_paleo, _bounds_paleo = mapaweb.gerar_overlay_web(
+            _cls_paleo, dados["transform"], dados["crs"], paleo.cores_overlay())
+        _mapa_paleo = folium.Map(
+            location=[(_bounds_paleo[0][0] + _bounds_paleo[1][0]) / 2,
+                      (_bounds_paleo[0][1] + _bounds_paleo[1][1]) / 2],
+            zoom_start=10, tiles=None, control_scale=True)
+        _fit_paleo = mapaweb.bounds_recorte(_cls_paleo > 0, dados["transform"],
+                                            dados["crs"])
+        if _fit_paleo:
+            _mapa_paleo.fit_bounds(_fit_paleo)
+
+        folium.TileLayer(
+            tiles=("https://server.arcgisonline.com/ArcGIS/rest/services/"
+                   "World_Imagery/MapServer/tile/{z}/{y}/{x}"),
+            attr=("Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, "
+                  "GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User "
+                  "Community"),
+            name="Esri World Imagery", overlay=False, control=True,
+        ).add_to(_mapa_paleo)
+        folium.TileLayer(tiles="OpenStreetMap", name="OpenStreetMap",
+                         overlay=False, control=True).add_to(_mapa_paleo)
+        folium.raster_layers.ImageOverlay(
+            image=_uri_paleo, bounds=_bounds_paleo,
+            opacity=paleo.CONFIG_PALEO["alpha_overlay_web"],
+            name=f"Estágio {_est['estagio']} × hoje",
+            interactive=False, cross_origin=False, zindex=2,
+        ).add_to(_mapa_paleo)
+        folium.GeoJson(
+            {"type": "FeatureCollection",
+             "features": [{"type": "Feature", "properties": {},
+                           "geometry": _est["_geometria"]}]},
+            name="Paleolinha de costa",
+            style_function=lambda _: {
+                "color": paleo.CONFIG_PALEO["cores"]["contorno"],
+                "weight": 2, "fillOpacity": 0.0},
+        ).add_to(_mapa_paleo)
+        folium.LayerControl(collapsed=True).add_to(_mapa_paleo)
+
+        # `returned_objects=[]`: esta aba não lê clique, então não há motivo
+        # para o st_folium devolver estado e disparar rerun a cada pan.
+        st_folium(_mapa_paleo, width=None, height=altura_mapa,
+                  returned_objects=[], key="mapa_paleo")
+
+        # ---- Comparação entre estágios (v2.1) --------------------------------
+        if len(_ests) > 1:
+            st.markdown("##### Todos os estágios")
+            _tab_paleo = _paleo_tabela(caminho, _DIR_WEB)
+            if _tab_paleo:
+                _df_paleo = pd.DataFrame([{
+                    "Estágio": t["estagio"],
+                    "Período": t.get("periodo") or "—",
+                    "Idade": t["idade_rotulo"],
+                    "NMRM (m)": (f"{t['nmrm_m']:+.1f}"
+                                 if isinstance(t["nmrm_m"], (int, float)) else "—"),
+                    "Terra no estágio (km²)": round(t["area_terra_paleo_km2"]),
+                    "Terra hoje (km²)": round(t["area_terra_hoje_km2"]),
+                    "Hoje − estágio (km²)": round(t["variacao_km2"]),
+                    "Construída desde então (km²)": round(t["area_ganho_km2"]),
+                    "Terra então, água hoje (km²)": round(t["area_perda_km2"]),
+                } for t in _tab_paleo])
+                st.dataframe(_df_paleo, hide_index=True, width="stretch")
+                st.caption(
+                    "Mesma régua de pixel das métricas acima, dentro do quadro das "
+                    "figuras. \"Hoje\" é sempre o FABDEM; nenhum estágio do artigo "
+                    "é a costa atual — o VII é a última fase do modelo, no Holoceno "
+                    "tardio. NMRM só aparece onde o artigo dá cota (curva de "
+                    "Salvador). Um erro de centenas de metros ao longo de dezenas "
+                    "de km de costa equivale a dezenas de km²: diferenças desse "
+                    "tamanho entre estágios vizinhos (V, VI, VII) estão dentro do "
+                    "erro de redesenho.")
+
+        st.markdown("##### Figura do relatório")
+        _fig_paleo, _ = paleo.figura_paleo(
+            core, dados, _cls_paleo, _est, _stats_paleo, GJ_PALEO,
+            hs=hs, tema=tema_figura, figsize=CONFIG_UI["figsize"],
+            dentro_quadro=_dentro_paleo)
+        _lado_p = max(0.001, (100 - largura_figura) / 2)
+        _e_p, _c_p, _d_p = st.columns([_lado_p, float(largura_figura), _lado_p])
+        with _c_p:
+            st.pyplot(_fig_paleo, width="stretch")
+
+        _buf_paleo = io.BytesIO()
+        _fig_paleo.savefig(_buf_paleo, format="png",
+                           dpi=paleo.CONFIG_PALEO["dpi_export"],
+                           bbox_inches="tight",
+                           facecolor=_fig_paleo.get_facecolor())
+        st.download_button(
+            "⬇️ Baixar figura (PNG 300 dpi)", _buf_paleo.getvalue(),
+            file_name=f"paleoambiente_estagio_{_est['estagio']}.png",
+            mime="image/png")
+        plt.close(_fig_paleo)
+
 with aba_curva:
     st.markdown("Área inundada em função do NMRM — a **curva hipsométrica efetiva** "
                 "da planície. Onde ela vira para cima está o limiar em que a "
