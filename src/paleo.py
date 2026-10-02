@@ -301,6 +301,11 @@ def cores_overlay() -> dict:
     return {1: c["permanente"], 2: c["ganho"], 3: c["perda"]}
 
 
+def _br0(v: float) -> str:
+    """km² inteiro no padrão brasileiro (1.278), para legenda e figura."""
+    return f"{v:,.0f}".replace(",", ".")
+
+
 def _pares_legenda(stats: dict) -> list:
     """(chave, área) das classes que merecem entrar na legenda. `stats` é o que
     `estatisticas_estagio` devolve — não confundir com o dicionário do estágio,
@@ -317,7 +322,7 @@ def itens_legenda(stats: dict) -> list[dict]:
     desprezível (ver `area_min_legenda_km2`).
     """
     cores, rot = CONFIG_PALEO["cores"], CONFIG_PALEO["rotulos"]
-    return [{"cor": cores[k], "rotulo": f"{rot[k]} — {v:,.0f} km²"}
+    return [{"cor": cores[k], "rotulo": f"{rot[k]} — {_br0(v)} km²"}
             for k, v in _pares_legenda(stats)]
 
 
@@ -457,7 +462,7 @@ def figura_paleo(core, dados_dem: dict, classes: np.ndarray, est: dict,
                            quadro=(bb[0], bb[1], bb[2], bb[3]))
 
     itens = [Patch(facecolor=cfg["cores"][k], edgecolor="none",
-                   label=f"{cfg['rotulos'][k]} — {v:,.0f} km²")
+                   label=f"{cfg['rotulos'][k]} — {_br0(v)} km²")
              for k, v in _pares_legenda(stats)]
     if itens:
         ax.legend(handles=itens, loc="lower right", fontsize=8, framealpha=.85)

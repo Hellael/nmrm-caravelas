@@ -1,12 +1,23 @@
 [server]
 maxUploadSize = 5
 
-# Tema da APLICAÇÃO (v1.2). O tema das FIGURAS é controlado à parte, pelo
-# toggle "Tema escuro nas figuras" na barra lateral — ver CONFIG_TEMA em
-# src/slr_core.py. Paleta preto azulado, no estilo "dim".
+# Tema da APLICAÇÃO (v3.0, 02/10/2026). Fundo azul-marinho, cartões
+# arredondados, destaque azul para a água e dourado só nas etiquetas (este
+# último vem do CSS do 02, classe `nmrm-eyebrow`). Fonte Rubik no texto e nos
+# títulos; IBM Plex Mono nos números. O tema das FIGURAS é controlado à parte
+# ("Tema escuro na figura", em Ajustes avançados) — ver CONFIG_TEMA em
+# src/slr_core.py.
 [theme]
 base = "dark"
-primaryColor = "#1D9BF0"            # azul de destaque (sliders, links, foco)
-backgroundColor = "#0B1220"         # fundo principal — preto azulado
-secondaryBackgroundColor = "#15202B" # barra lateral, cards, tabelas
+primaryColor = "#1D9BF0"             # azul de destaque (sliders, links, foco)
+backgroundColor = "#0B1220"          # fundo principal — azul-marinho quase preto
+secondaryBackgroundColor = "#111B2E" # cartões, popovers, tabelas
 textColor = "#E7E9EA"
+borderColor = "#22314A"
+showWidgetBorder = true
+baseRadius = "large"
+font = "Rubik:https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap"
+headingFont = "Rubik:https://fonts.googleapis.com/css2?family=Rubik:wght@500;600;700&display=swap"
+codeFont = "'IBM Plex Mono':https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&display=swap"
+metricValueFontSize = "1.7rem"
+metricValueFontWeight = 600
