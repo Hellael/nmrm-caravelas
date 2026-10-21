@@ -45,7 +45,8 @@ nmrm-caravelas/
 │   ├── slr_core.py            # MOTOR — sem interface, toda a ciência
 │   ├── fonte_dados.py         # decide modo local x web, lê MDE e limiar
 │   ├── mapa_web.py            # camadas do mapa interativo (overlays, isolinhas, turma)
-│   └── cobertura.py           # legenda MapBiomas Col. 11 + leitura do recorte
+│   ├── cobertura.py           # legenda MapBiomas Col. 11 + leitura do recorte
+│   └── correntes.py           # camada de correntes oceânicas (overlay, setas, leitura no clique)
 ├── 01_mapa_elevacao.py        # mosaico/recorte/reprojeção FABDEM + mapa base
 ├── 02_simulador_nmrm.py       # interface Streamlit sobre slr_core
 ├── 03_prepara_dem_web.py      # gera os dados leves de dados_web/
@@ -55,6 +56,9 @@ nmrm-caravelas/
 ├── 07_mare_tpxo.py            # proveniência da maré TPXO9 (roda fora deste repo)
 ├── 08_prepara_camadas_turma.py  # regenera ucs_turma.geojson a partir do CNUC bruto
 ├── 09_limite_turma.py         # converte o shapefile da área de estudo -> limite_turma.geojson
+├── 11_baixa_correntes.py      # baixa uo/vo mensais do CMEMS GLORYS12 (exige login CMEMS)
+├── 12_prepara_correntes.py    # climatologia + trimestres -> dados_web/correntes_caravelas.npz
+├── teste_sintetico_correntes.py  # valida o 12 com NetCDF falso; grava só em saidas/
 ├── diagnostico_zeros.py       # [diagnóstico] os 0,0 m do FABDEM são todos oceano?
 ├── histograma_cauda_costeira.py  # [diagnóstico] histograma fino da cauda inferior
 ├── teste_sintetico.py         # valida o pipeline sem FABDEM; grava o MDE sintético em saidas/, NUNCA em processado/
@@ -236,6 +240,17 @@ reamostragem *nearest* (dado categórico) e grava o recorte alinhado à grade do
 MDE, em `dados/auxiliar/` e em `dados_web/`. A camada aparece no mapa
 interativo; se o recorte não existir, o controle fica desligado e a simulação
 segue normalmente.
+
+**Correntes oceânicas (CMEMS GLORYS12, 2016–2025, camada visual).** Médias
+mensais de `uo`/`vo` do produto GLOBAL_MULTIYEAR_PHY_001_030 (grade de 1/12°),
+baixadas por `11_baixa_correntes.py` (exige conta gratuita em
+<https://data.marine.copernicus.eu>) e reduzidas por `12_prepara_correntes.py`
+a climatologia e trimestres JFM/AMJ/JAS/OND, em 4 profundidades. O produto leve
+é `dados_web/correntes_caravelas.npz`. É **modelo assimilativo, não medição**, e
+não entra em nenhuma conta de exposição.
+
+> Generated using E.U. Copernicus Marine Service Information;
+> <https://doi.org/10.48670/moi-00021>
 
 ## Novidades da v1.3
 
