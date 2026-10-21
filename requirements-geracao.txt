@@ -13,3 +13,9 @@ pyshp>=2.3
 #
 # 07_mare_tpxo.py também precisa de numpy + netCDF4, mas roda em outra
 # máquina (contra o atlas TPXO9, ~10 GB) — ver o cabeçalho do script.
+#
+# 11_baixa_correntes.py / 12_prepara_correntes.py -> dados_web/correntes_caravelas.npz
+#   (correntes GLORYS12 do CMEMS; exige conta gratuita em data.marine.copernicus.eu)
+copernicusmarine>=2.0
+xarray>=2024.1
+netCDF4>=1.6

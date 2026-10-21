@@ -198,3 +198,55 @@ CORES_FAIXAS = [
     "#08306b", "#2171b5", "#4292c6", "#6baed6", "#9ecae1",
     "#c7e9c0", "#74c476", "#31a354", "#e6d3a3", "#b09060",
 ]
+
+
+# =============================================================================
+# CORRENTES OCEÂNICAS — CMEMS GLORYS12 (v3.1)
+# =============================================================================
+
+# Domínio das correntes: bem maior que a planície e que BBOX_TURMA, porque a
+# pergunta do grupo é oceânica (Corrente do Brasil sobre o talude, giros e
+# meandros ao largo dos Abrolhos). 8° x 8° na grade de 1/12° dá 96 x 96 células.
+BBOX_CORRENTES = {"lon_min": -41.0, "lon_max": -33.0,
+                  "lat_min": -22.0, "lat_max": -14.0}
+
+# Tudo o que `11_baixa_correntes.py`, `12_prepara_correntes.py` e a camada do
+# simulador precisam saber vem daqui.
+CONFIG_CORRENTES = {
+    # Reanálise GLORYS12 mensal (uo, vo). Segundo o PUM do produto
+    # GLOBAL_MULTIYEAR_PHY_001_030, o interino foi incorporado a este dataset
+    # (cobertura 1993 até M-1), então UM dataset cobre os 10 anos.
+    "dataset_id": "cmems_mod_glo_phy_my_0.083deg_P1M-m",
+    "variaveis": ["uo", "vo"],
+    # Janela: 10 anos CIVIS completos (jan/ano_inicio a dez/ano_fim).
+    "ano_inicio": 2016,
+    "ano_fim": 2025,
+    # Profundidades-alvo (m). O CMEMS devolve o nível mais próximo; a
+    # profundidade REAL usada vai para o arquivo e para a interface.
+    "profundidades_m": [0.5, 50.0, 200.0, 1000.0],
+    # Períodos de análise. None = todos os meses (climatologia).
+    # Trimestres: JFM, AMJ, JAS, OND (o pedido original dizia "Jun-Ago-Set";
+    # tratado como Jul-Ago-Set para os quatro trimestres fecharem o ano).
+    "periodos": {
+        "climatologia": None,
+        "JFM": [1, 2, 3],
+        "AMJ": [4, 5, 6],
+        "JAS": [7, 8, 9],
+        "OND": [10, 11, 12],
+    },
+    "rotulos_periodos": {
+        "climatologia": "Climatologia (todos os meses)",
+        "JFM": "Jan–Fev–Mar",
+        "AMJ": "Abr–Mai–Jun",
+        "JAS": "Jul–Ago–Set",
+        "OND": "Out–Nov–Dez",
+    },
+    # Entrada bruta (NÃO versionar) e produto leve (versionado).
+    "subdir_bruto": "correntes",
+    "arquivo_produto": "correntes_caravelas.npz",
+    # Controle de qualidade do 12: acima disto avisa (m/s).
+    "rapidez_max_plausivel_ms": 3.0,
+}
+
+ARQ_CORRENTES_WEB = CONFIG_CORRENTES["arquivo_produto"]
+DIR_CORRENTES_BRUTO = DIR_DADOS / CONFIG_CORRENTES["subdir_bruto"]
