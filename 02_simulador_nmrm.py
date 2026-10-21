@@ -49,6 +49,7 @@ from streamlit_folium import st_folium
 
 import config
 import src.cobertura as cob
+import src.correntes as corr
 import src.fonte_dados as fonte
 import src.mapa_web as mapaweb
 import src.paleo as paleo
@@ -224,6 +225,23 @@ def _carregar_cobertura(caminho: str):
     # Retorna None quando o recorte não existe — a camada é opcional e a
     # simulação nunca depende dela.
     return cob.carregar_cobertura(caminho)
+
+
+@st.cache_resource(show_spinner="Lendo as correntes (CMEMS GLORYS12)...")
+def _carregar_correntes(caminho: str, _mtime: float):
+    # None quando o produto não existe (rode 11 e 12) — camada opcional.
+    # `_mtime` entra na chave do cache: regerar o npz invalida a leitura antiga.
+    return corr.carregar(caminho)
+
+
+@st.cache_data(show_spinner="Desenhando as correntes...")
+def _corr_overlay(caminho: str, _mtime: float, ip: int, iz: int):
+    return corr.gerar_overlay(_carregar_correntes(caminho, _mtime), ip, iz)
+
+
+@st.cache_data(show_spinner=False)
+def _corr_setas(caminho: str, _mtime: float, ip: int, iz: int):
+    return corr.gerar_setas_geojson(_carregar_correntes(caminho, _mtime), ip, iz)
 
 
 @st.cache_data(show_spinner="Lendo os constituintes de maré (TPXO9-atlas v5)...")
@@ -809,6 +827,11 @@ tem_cobertura = bool(caminho_cobertura and os.path.exists(caminho_cobertura))
 GJ_PALEO = _paleo_geojson(_DIR_WEB)
 tem_paleo = GJ_PALEO is not None
 
+caminho_correntes = corr.caminho_produto(_DIR_WEB)
+_mtime_correntes = os.path.getmtime(caminho_correntes) if os.path.exists(caminho_correntes) else 0.0
+D_CORRENTES = _carregar_correntes(caminho_correntes, _mtime_correntes)
+tem_correntes = D_CORRENTES is not None
+
 _limite_ok = (_camadas_turma(_DIR_WEB) or {}).get("limite") is not None
 
 # ---- Tetos do NMRM -----------------------------------------------------------
@@ -1041,6 +1064,27 @@ def _controles(p: str) -> dict:
         "Cobertura MapBiomas", key=_padrao(k("cobertura"), False),
         help="Camada VISUAL (Coleção 11, 2025): não entra em nenhuma conta.")
         if tem_cobertura else False)
+    par["ver_correntes"] = (st.toggle(
+        "Correntes oceânicas (CMEMS)", key=_padrao(k("correntes"), False),
+        help="Média de 10 anos de correntes (GLORYS12). Camada VISUAL de contexto "
+             "oceânico: não entra em nenhuma conta de exposição ao NMRM.")
+        if tem_correntes else False)
+    par["corr_periodo"], par["corr_nivel"], par["corr_setas"] = "climatologia", 0, True
+    if par["ver_correntes"]:
+        _cp = config.CONFIG_CORRENTES["periodos"]
+        _trimestres = [c for c in _cp if c != "climatologia" and c in D_CORRENTES["periodos"]]
+        _tipo = st.segmented_control(
+            "Análise", ["Climatologia", "Por trimestre"],
+            key=_padrao(k("corr_tipo"), "Climatologia"), width="stretch") or "Climatologia"
+        if _tipo == "Por trimestre" and _trimestres:
+            par["corr_periodo"] = st.selectbox(
+                "Trimestre (média dos 10 anos)", _trimestres,
+                format_func=corr.rotulo_periodo, key=_padrao(k("corr_trim"), _trimestres[0]))
+        par["corr_nivel"] = st.selectbox(
+            "Profundidade", list(range(len(D_CORRENTES["prof_usada"]))),
+            format_func=lambda i: corr.rotulo_nivel(D_CORRENTES, i),
+            key=_padrao(k("corr_nivel"), 0))
+        par["corr_setas"] = st.toggle("Setas de direção", key=_padrao(k("corr_setas"), True))
     par["ver_limite_turma"] = st.toggle(
         "Limite da área de estudo", key=_padrao(k("limite"), cfg["camadas_turma_ligadas"]))
     par["ver_isobatas_turma"] = st.toggle(
@@ -1112,6 +1156,10 @@ def _controles(p: str) -> dict:
         par["opac_cob"] = st.slider("Opacidade da cobertura", 0.1, 1.0, step=0.05,
                                     key=_padrao(k("opac_cob"), CONFIG_UI["opacidade_cobertura"]),
                                     disabled=not par["ver_cobertura"])
+        par["opac_corr"] = st.slider("Opacidade das correntes", 0.1, 1.0, step=0.05,
+                                     key=_padrao(k("opac_corr"),
+                                                 corr.CONFIG_CORRENTES_VIZ["opacidade_padrao"]),
+                                     disabled=not par["ver_correntes"])
     par["sobrelev"] = sobrelev
     return par
 
@@ -1280,6 +1328,8 @@ def _mapa_interativo(p, par, mascaras, recorte, cota) -> None:
     usar_recorte = par["usar_recorte"]
     dados_cob = _carregar_cobertura(caminho_cobertura) if tem_cobertura else None
     chave_ponto = f"{CHAVE_PONTO}_{p}"
+    corr_ip = (D_CORRENTES["periodos"].index(par["corr_periodo"])
+               if par["ver_correntes"] and par["corr_periodo"] in D_CORRENTES["periodos"] else 0)
 
     def _leitura_ponto(ponto) -> dict | None:
         """Lê todas as camadas num ponto (lat, lon). Uma função só para o popup
@@ -1287,13 +1337,17 @@ def _mapa_interativo(p, par, mascaras, recorte, cota) -> None:
         if not ponto:
             return None
         lat, lon = float(ponto[0]), float(ponto[1])
+        # Corrente é leitura de CONTEXTO oceânico: vale também fora do recorte
+        # (o recorte só governa o que entra na conta de exposição).
+        rc = (corr.valor_no_ponto(D_CORRENTES, corr_ip, par["corr_nivel"], lat, lon)
+              if par["ver_correntes"] else None)
         # Clique FORA da área de estudo, com recorte ligado, não devolve cota:
         # aquele pixel não entra em conta nenhuma.
         if recorte is not None:
             dentro = mapaweb.valor_no_ponto(recorte.astype("uint8"),
                                             dados["transform"], dados["crs"], lat, lon)
             if not dentro:
-                return {"lat": lat, "lon": lon, "fora_do_recorte": True}
+                return {"lat": lat, "lon": lon, "fora_do_recorte": True, "corrente": rc}
 
         z = mapaweb.valor_no_ponto(dados["dem"], dados["transform"], dados["crs"], lat, lon)
         inund = mapaweb.valor_no_ponto(mascaras["inundada"].astype("uint8"),
@@ -1341,7 +1395,22 @@ def _mapa_interativo(p, par, mascaras, recorte, cota) -> None:
                 "faixa_cor": "#9E9E9E" if faixa is None else faixa["cor"],
                 "situacao": situacao, "folga_txt": folga_txt, "codigo": codigo,
                 "classe": classe_nome, "classe_cor": cor_classe,
-                "alerta_dossel": cob.alerta_dossel(codigo)}
+                "alerta_dossel": cob.alerta_dossel(codigo), "corrente": rc}
+
+    def _linhas_corrente(l: dict) -> str:
+        """Linhas de corrente do popup/métricas; vazio com a camada desligada."""
+        c = l.get("corrente")
+        if not par["ver_correntes"] or c is None:
+            return ""
+        rot = f"{corr.rotulo_periodo(par['corr_periodo'])} · {corr.rotulo_nivel(D_CORRENTES, par['corr_nivel'])}"
+        if c.get("terra"):
+            txt = "célula de terra no modelo"
+        else:
+            txt = (f"{c['rapidez']:.2f} m/s para {c['rosa']} ({c['direcao']:.0f}°)"
+                   .replace(".", ","))
+        return (f'<tr><td style="padding:2px 8px 2px 0;color:#555;white-space:nowrap;">'
+                f'Corrente<br><span style="font-size:10px">{rot}</span></td>'
+                f'<td style="padding:2px 0;"><b>{txt}</b></td></tr>')
 
     def _popup_html(l: dict) -> str:
         def _linha(rotulo, valor, cor=None):
@@ -1355,23 +1424,28 @@ def _mapa_interativo(p, par, mascaras, recorte, cota) -> None:
                f'line-height:1.4;min-width:230px;"><div style="font-weight:600;'
                f'margin-bottom:4px;">{l["lat"]:.5f}°, {l["lon"]:.5f}°</div>')
         if l.get("fora_do_recorte"):
+            _tab_c = _linhas_corrente(l)
             return (cab + '<div style="padding:5px 6px;background:#EEF1F4;border-left:3px '
                     'solid #8A97A3;font-size:11.5px;color:#33404B;line-height:1.35;">Fora '
                     'da área de estudo da turma. Este ponto não entra em nenhuma conta '
-                    'desta análise.</div></div>')
+                    'desta análise.</div>'
+                    + (f'<table style="border-collapse:collapse;margin-top:4px;">{_tab_c}</table>'
+                       if _tab_c else '') + '</div>')
         linhas = [_linha(f"Cota ({core.CONFIG_DEM['datum_vertical']})", l["cota_txt"]),
                   _linha("Faixa", l["faixa_txt"], l["faixa_cor"]),
                   _linha(f"Em {cota['cota_m']:.2f} m", l["situacao"]),
                   _linha("Folga", l["folga_txt"])]
         if dados_cob is not None:
             linhas.append(_linha("Cobertura", l["classe"], l["classe_cor"]))
+        _lc = _linhas_corrente(l)
         aviso = ""
         if l["alerta_dossel"]:
             aviso = ('<div style="margin-top:6px;padding:5px 6px;background:#FFF4CE;'
                      'border-left:3px solid #E0A800;font-size:11px;color:#5A4A00;'
                      'line-height:1.35;">Manguezal: a cota aqui inclui dossel residual '
                      'do relevo. Leia como limite superior, não como cota do solo.</div>')
-        return cab + f'<table style="border-collapse:collapse;">{"".join(linhas)}</table>{aviso}</div>'
+        return (cab + f'<table style="border-collapse:collapse;">{"".join(linhas)}{_lc}</table>'
+                f'{aviso}</div>')
 
     # ---- Camadas -----------------------------------------------------------------
     png_uri = bounds_web = None
@@ -1396,7 +1470,10 @@ def _mapa_interativo(p, par, mascaras, recorte, cota) -> None:
     mapa_web = folium.Map(location=[(bounds_topo[0][0] + bounds_topo[1][0]) / 2,
                                     (bounds_topo[0][1] + bounds_topo[1][1]) / 2],
                           zoom_start=11, tiles=None, control_scale=True)
-    if usar_recorte:
+    if par["ver_correntes"]:
+        # Correntes são oceânicas: enquadra o domínio delas, não a planície.
+        mapa_web.fit_bounds(corr.limites_graus(D_CORRENTES))
+    elif usar_recorte:
         _bounds_rec = mapaweb.bounds_recorte(recorte, dados["transform"], dados["crs"])
         if _bounds_rec:
             mapa_web.fit_bounds(_bounds_rec)
@@ -1416,6 +1493,26 @@ def _mapa_interativo(p, par, mascaras, recorte, cota) -> None:
                 name=f"Cobertura — {cob.CONFIG_COBERTURA['colecao']} "
                      f"({cob.CONFIG_COBERTURA['ano_referencia']})",
                 interactive=False, cross_origin=False, zindex=2).add_to(mapa_web)
+    if par["ver_correntes"]:
+        _ip, _iz = corr_ip, par["corr_nivel"]
+        _rot_corr = (f"{corr.rotulo_periodo(par['corr_periodo'])} · "
+                     f"{corr.rotulo_nivel(D_CORRENTES, _iz)}")
+        _uri_c, _bounds_c = _corr_overlay(caminho_correntes, _mtime_correntes, _ip, _iz)
+        folium.raster_layers.ImageOverlay(
+            image=_uri_c, bounds=_bounds_c, opacity=par["opac_corr"],
+            name=f"Correntes (m/s) — {_rot_corr}",
+            interactive=False, cross_origin=False, zindex=2).add_to(mapa_web)
+        if par["corr_setas"]:
+            _cfg_v = corr.CONFIG_CORRENTES_VIZ
+            folium.GeoJson(
+                _corr_setas(caminho_correntes, _mtime_correntes, _ip, _iz),
+                name="Setas de corrente",
+                style_function=lambda _f, _c=_cfg_v: {
+                    "color": _c["seta_cor"], "weight": _c["seta_espessura"], "opacity": 0.9},
+                tooltip=folium.GeoJsonTooltip(fields=["rap", "dir"],
+                                              aliases=["Rapidez:", "Para (azimute):"],
+                                              sticky=True),
+            ).add_to(mapa_web)
     if par["ver_exposicao"] and png_uri:
         folium.raster_layers.ImageOverlay(
             image=png_uri, bounds=bounds_web, opacity=core.CONFIG_MAPA["alpha_agua"],
@@ -1525,6 +1622,22 @@ def _mapa_interativo(p, par, mascaras, recorte, cota) -> None:
             st.warning("Ponto sobre **manguezal**: a cota aqui carrega dossel residual "
                        "(mediana de 4,31 m contra 1,91 m do apicum). Leia como limite "
                        "superior, não como cota do solo.", icon="⚠️")
+    _c = (leitura or {}).get("corrente") if par["ver_correntes"] else None
+    if _c is not None:
+        c1, c2, c3, c4 = st.columns(4)
+        _rot_c = (f"{corr.rotulo_periodo(par['corr_periodo'])} · "
+                  f"{corr.rotulo_nivel(D_CORRENTES, par['corr_nivel'])}")
+        if _c.get("terra"):
+            c1.metric("Corrente", "célula de terra", delta=_rot_c, delta_color="off")
+        else:
+            c1.metric("Corrente (média de 10 anos)", f"{_br(_c['rapidez'], 2)} m/s",
+                      delta=_rot_c, delta_color="off")
+            c2.metric("Para onde flui", f"{_c['rosa']} ({_c['direcao']:.0f}°)")
+            c3.metric("Componentes u · v", f"{_br(_c['u'], 2)} · {_br(_c['v'], 2)}",
+                      help="u = leste (+) / oeste (−); v = norte (+) / sul (−), em m/s.")
+            c4.metric("Constância", "—" if _c["constancia"] is None else _br(_c["constancia"], 2),
+                      help="|vetor médio| / média da rapidez mensal. Perto de 1: corrente "
+                           "estável; perto de 0: meandros e reversões.")
     if leitura:
         if st.button("Limpar ponto consultado", key=f"btn_limpar_{p}"):
             st.session_state.pop(chave_ponto, None)
@@ -1542,6 +1655,15 @@ def _legendas_mapa(par, cota) -> None:
     itens.append({"cor": core.CONFIG_MAPA["cor_oceano"], "rotulo": "Oceano/estuário atual"})
     st.markdown(_legenda_html(itens, f"Exposição — cota {cota['cota_m']:.2f} m"),
                 unsafe_allow_html=True)
+    if par["ver_correntes"] and tem_correntes:
+        st.markdown(corr.legenda_html(
+            corr.vmax_nivel(D_CORRENTES, par["corr_nivel"]),
+            f"Correntes — {corr.rotulo_periodo(par['corr_periodo'])} · "
+            f"{corr.rotulo_nivel(D_CORRENTES, par['corr_nivel'])}"), unsafe_allow_html=True)
+        st.caption("Escala de cor fixa por profundidade: a climatologia e os trimestres "
+                   "são comparáveis entre si. Mostra o campo MÉDIO (vetor médio de "
+                   f"{D_CORRENTES['meta'].get('anos', 10)} anos); a constância (clique) diz o "
+                   "quanto ele representa a corrente instantânea.")
     if par["ver_topo"]:
         st.markdown(_legenda_html(
             [{"cor": f["cor"], "rotulo": f["faixa"]}
@@ -2019,6 +2141,24 @@ def pagina_metadados() -> None:
             "e `09_limite_turma.py` só o converte. Consequências assumidas: (1) fica de "
             "fora a planície continental a oeste, que o domínio inteiro conta; (2) os "
             "km² são a TERRA da área coberta pelo MDE, não a extensão do polígono.")
+
+    if tem_correntes:
+        _m = D_CORRENTES["meta"]
+        with st.container(border=True):
+            st.markdown("#### Procedência das correntes oceânicas")
+            st.markdown(
+                f"**Produto:** {_m.get('produto')} — dataset `{_m.get('dataset_id')}`, "
+                f"{_m.get('variaveis')}, grade {_m.get('grade')}. **Janela:** "
+                f"{_m.get('janela')} ({_m.get('anos')} anos). **Período:** "
+                f"{_m.get('ponderacao')}; trimestres JFM, AMJ, JAS e OND "
+                f"({_m.get('n_meses_por_periodo', {}).get('JFM', '—')} meses cada, "
+                f"{_m.get('n_meses_por_periodo', {}).get('climatologia', '—')} na "
+                f"climatologia). **Níveis reais usados:** "
+                + ", ".join(corr.rotulo_nivel(D_CORRENTES, i)
+                            for i in range(len(D_CORRENTES["prof_usada"]))) + ".\n\n"
+                f"**Limitação:** {_m.get('limitacao')} Camada VISUAL de contexto "
+                "oceânico: não entra em nenhuma conta de exposição ao NMRM e não é "
+                f"recortada pela área de estudo. Gerado em {_m.get('gerado_em')}.")
 
     with st.container(border=True):
         st.markdown("#### Camadas de contexto da turma")
