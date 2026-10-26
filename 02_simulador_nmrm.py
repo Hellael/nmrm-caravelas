@@ -96,6 +96,9 @@ CONFIG_UI = {
     # Opacidade padrão das camadas do mapa interativo.
     "opacidade_topo":      0.80,
     "opacidade_cobertura": 0.75,
+    # Opacidade dos biomas na FIGURA estática (v3.2). Mais alta que no mapa
+    # interativo: aqui não há basemap por baixo, a cobertura é o fundo.
+    "alpha_biomas_figura": 0.92,
 }
 
 # -----------------------------------------------------------------------------
@@ -1260,22 +1263,120 @@ def pagina_simulador(p: str) -> None:
         _secao_turma(par, mascaras, cota)
 
 
+def _pacote_cobertura(recorte) -> dict | None:
+    """
+    Camada de biomas (MapBiomas Col. 11) no formato que `core.figura_mapa`
+    espera em `cobertura` — o motor não importa `src/cobertura.py`, então a
+    interface monta o dict. Com recorte ligado, fora da área de estudo as
+    classes viram nodata: somem do desenho E da legenda (mesma regra do mapa
+    interativo). None se a camada não existe ou a grade não casa com a do MDE.
+    """
+    d = _carregar_cobertura(caminho_cobertura) if tem_cobertura else None
+    if d is None or d["classes"].shape != dados["dem"].shape:
+        return None
+    arr = d["classes"]
+    if recorte is not None:
+        arr = np.where(recorte, arr, d["nodata"])
+    d2 = dict(d)
+    d2["classes"] = arr
+    legenda = cob.legenda_para_interface(cob.resumo_classes(d2))
+    nota = (f"Biomas: {cob.CONFIG_COBERTURA['colecao']} "
+            f"({cob.CONFIG_COBERTURA['ano_referencia']}), camada visual — não entra em "
+            "nenhuma conta. Sobre o manguezal o FABDEM carrega viés de dossel (cota "
+            "superestimada): não leia área de mangue perdida por cenário neste mapa.")
+    return {"classes": arr, "nodata": d["nodata"], "cores": cob.cores_overlay(d2),
+            "legenda": [{"nome": i["nome"], "cor": i["cor"]} for i in legenda],
+            "alpha": CONFIG_UI["alpha_biomas_figura"], "nota": nota}
+
+
+def _opcoes_figura(p: str, par: dict) -> dict:
+    """
+    Popover "Formato da figura" (v3.2): um mapa ou dois lado a lado, com a
+    camada de biomas ligável em cada um. O mapa 2 pode repetir a cota do mapa 1
+    (caso típico: exposição | biomas) ou usar outra, para comparar dois níveis.
+    Devolve as escolhas; quem gera a figura é `_figura_sob_demanda`.
+    """
+    def k(nome):
+        return f"{PREFIXO_WIDGET}fig_{nome}_{p}"
+
+    op = {"formato": "1", "bio1": False, "bio2": False, "outra_cota": False, "nmrm2": None}
+    with st.popover("Formato da figura", icon=":material/dashboard:", width="stretch"):
+        _fmt = {"1": "Um mapa", "2": "Dois mapas lado a lado"}
+        op["formato"] = st.radio("Formato", list(_fmt), format_func=_fmt.get,
+                                 key=_padrao(k("formato"), "1"), horizontal=True)
+        if not tem_cobertura:
+            st.caption("Camada de biomas ausente — rode `04_prepara_cobertura.py`.")
+        _rot1 = "Biomas (MapBiomas) no mapa" if op["formato"] == "1" else "Biomas (MapBiomas) no mapa 1"
+        op["bio1"] = bool(tem_cobertura and st.toggle(
+            _rot1, key=_padrao(k("bio1"), False), disabled=not tem_cobertura,
+            help="Troca o fundo hipsométrico pela cobertura do solo (visual, "
+                 "não entra em nenhuma conta)."))
+        if op["formato"] == "2":
+            st.divider()
+            op["bio2"] = bool(tem_cobertura and st.toggle(
+                "Biomas (MapBiomas) no mapa 2", key=_padrao(k("bio2"), True),
+                disabled=not tem_cobertura))
+            op["outra_cota"] = st.toggle(
+                "Mapa 2 com outra cota", key=_padrao(k("outra"), False),
+                help="Desligado, o mapa 2 usa a mesma cota do mapa 1 — o par "
+                     "natural é exposição | biomas.")
+            if op["outra_cota"]:
+                op["nmrm2"] = st.number_input(
+                    "NMRM do mapa 2 (m)", CONFIG_UI["nmrm_min"], CONFIG_UI["nmrm_max_manual"],
+                    step=0.1, key=_padrao(k("nmrm2"), min(2.0, CONFIG_UI["nmrm_max_manual"])),
+                    help="Soma a mesma maré e sobrelevação do mapa 1.")
+    return op
+
+
 def _figura_sob_demanda(container, p, par, mascaras, recorte, cota) -> None:
     """
     Botão "Gerar figura" + download. A figura de 300 dpi é a parte mais
     pesada do app (~0,5 GB no pico): só é montada quando pedida, fechada logo
     depois, e o PNG fica guardado enquanto os parâmetros não mudam.
+
+    v3.2: formato de um ou dois mapas e camada de biomas (`_opcoes_figura`).
+    No formato de dois mapas cada mapa é uma figura completa de `figura_mapa`
+    (uma de cada vez, para o pico de memória não dobrar) e as duas são
+    compostas lado a lado por `core.compor_lado_a_lado`.
     """
+    with container:
+        op = _opcoes_figura(p, par)
+
     assinatura = (p, round(cota["cota_m"], 4), par["rotulo_cen"], par["conectividade"],
                   par["semear_bordas"], par["area_min"], par["fundo"], par["exagero"],
                   par["alpha_agua"], par["tema_figura"], par["mostrar_isoladas"],
                   par["usar_recorte"], par["enquadramento"], par["ver_limite_turma"],
-                  par["ver_isobatas_turma"], par["ver_ucs_turma"])
+                  par["ver_isobatas_turma"], par["ver_ucs_turma"],
+                  op["formato"], op["bio1"], op["bio2"], op["outra_cota"], op["nmrm2"])
     chave = f"nmrm_figura_{p}"
     guardada = st.session_state.get(chave)
     if guardada and guardada["assinatura"] != assinatura:
         st.session_state.pop(chave, None)
         guardada = None
+
+    def _um_mapa(cota_m: dict, masc: dict, rotulo: str, bio: bool, prefixo: str):
+        """Monta UMA figura e devolve (png 300 dpi, prévia). Fecha a figura."""
+        subtitulo = (f"{rotulo} · cota {cota_m['cota_m']:.2f} m · "
+                     f"{'com' if par['conectividade'] else 'SEM'} teste de conectividade")
+        titulo = (prefixo + "Exposição ao NMRM"
+                  + (" e biomas" if bio else "") + " — Caravelas (BA)")
+        pacote = _pacote_cobertura(recorte) if bio else None
+        if bio and pacote is None:
+            st.warning("Biomas indisponíveis (grade da cobertura difere da do MDE); "
+                       "o mapa saiu com o fundo hipsométrico.", icon="⚠️")
+        fig, _ = core.figura_mapa(
+            dados, masc, cota_m, titulo=titulo, subtitulo=subtitulo,
+            mostrar_isoladas=par["mostrar_isoladas"], fundo=par["fundo"],
+            hs=_hillshade(caminho, par["exagero"]), tema=par["tema_figura"],
+            figsize=CONFIG_UI["figsize"],
+            camadas_turma=_camadas_turma(_DIR_WEB),
+            ver_isobatas_turma=par["ver_isobatas_turma"],
+            ver_ucs_turma=par["ver_ucs_turma"],
+            ver_limite_turma=par["ver_limite_turma"],
+            recorte=recorte, enquadramento=par["enquadramento"], cobertura=pacote)
+        out = (_png(fig, core.CONFIG_MAPA["dpi_export"]), _png(fig, CONFIG_UI["dpi_previa"]))
+        plt.close(fig)
+        return out
 
     with container:
         b1, b2 = st.columns(2)
@@ -1283,27 +1384,35 @@ def _figura_sob_demanda(container, p, par, mascaras, recorte, cota) -> None:
                           key=f"btn_figura_{p}",
                           help="Monta a figura de 300 dpi (UTM, escala, norte, créditos).")
         if gerar:
-            with st.spinner("Desenhando a figura de 300 dpi..."):
-                subtitulo = (f"{par['rotulo_cen']} · cota {cota['cota_m']:.2f} m · "
-                             f"{'com' if par['conectividade'] else 'SEM'} teste de conectividade")
-                fig, _ = core.figura_mapa(
-                    dados, mascaras, cota, subtitulo=subtitulo,
-                    mostrar_isoladas=par["mostrar_isoladas"], fundo=par["fundo"],
-                    hs=_hillshade(caminho, par["exagero"]), tema=par["tema_figura"],
-                    figsize=CONFIG_UI["figsize"],
-                    camadas_turma=_camadas_turma(_DIR_WEB),
-                    ver_isobatas_turma=par["ver_isobatas_turma"],
-                    ver_ucs_turma=par["ver_ucs_turma"],
-                    ver_limite_turma=par["ver_limite_turma"],
-                    recorte=recorte, enquadramento=par["enquadramento"])
-                guardada = {"assinatura": assinatura,
-                            "png": _png(fig, core.CONFIG_MAPA["dpi_export"]),
-                            "previa": _png(fig, CONFIG_UI["dpi_previa"])}
-                plt.close(fig)
+            dois = op["formato"] == "2"
+            with st.spinner("Desenhando as figuras de 300 dpi..." if dois
+                            else "Desenhando a figura de 300 dpi..."):
+                png1, prev1 = _um_mapa(cota, mascaras, par["rotulo_cen"], op["bio1"],
+                                       "A · " if dois else "")
+                if dois:
+                    if op["outra_cota"] and op["nmrm2"] is not None:
+                        cota2 = core.cota_limiar(float(op["nmrm2"]), mare_m=par["mare"],
+                                                 sobrelevacao_m=par["sobrelev"])
+                        masc2 = fonte.mascara_inundacao_auto(
+                            core, dados, cota2["cota_m"],
+                            conectividade=par["conectividade"],
+                            semear_bordas=par["semear_bordas"],
+                            area_minima_ha=par["area_min"],
+                            mascara_agua=mascara_agua, limiar=limiar)
+                        rot2 = f"Manual +{op['nmrm2']:.2f} m".replace(".", ",")
+                    else:
+                        cota2, masc2, rot2 = cota, mascaras, par["rotulo_cen"]
+                    png2, prev2 = _um_mapa(cota2, masc2, rot2, op["bio2"], "B · ")
+                    fundo_fig = core.paleta(par["tema_figura"])["fundo_figura"]
+                    png1, prev1 = (core.compor_lado_a_lado(png1, png2, fundo_fig),
+                                   core.compor_lado_a_lado(prev1, prev2, fundo_fig))
+                guardada = {"assinatura": assinatura, "png": png1, "previa": prev1}
             st.session_state[chave] = guardada
         b2.download_button(
             "Baixar PNG", guardada["png"] if guardada else b"",
-            file_name=f"mapa_nmrm_{cota['cota_m']:.2f}m.png", mime="image/png",
+            file_name=(f"mapa_nmrm_{cota['cota_m']:.2f}m"
+                       + ("_dois_mapas" if op["formato"] == "2" else "") + ".png"),
+            mime="image/png",
             icon=":material/download:", type="primary", width="stretch",
             disabled=guardada is None, key=f"dl_figura_{p}",
             help=None if guardada else "Gere a figura primeiro.")

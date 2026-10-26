@@ -104,8 +104,11 @@ FONTE_CENARIOS = {
         "os valores desta tabela."
     ),
     "a_conferir": (
-        "SSP1-2.6, SSP2-4.5 e SSP5-8.5 baixa confiança ainda NÃO foram "
-        "conferidos linha a linha contra a Tabela 9.9 impressa."
+        "As quatro linhas (SSP1-2.6, SSP2-4.5, SSP5-8.5 e SSP5-8.5 baixa "
+        "confiança) foram conferidas em 26/10/2026 contra uma reprodução "
+        "SECUNDÁRIA da Tabela 9.9 (Hong Kong Observatory) e batem. Falta "
+        "conferir contra a tabela impressa do capítulo antes de citar no "
+        "relatório final."
     ),
     "substituir_por": (
         "Valores LOCAIS do grid point de Caravelas no NASA/IPCC AR6 Sea Level "
@@ -252,6 +255,8 @@ CONFIG_MAPA = {
     # próprio hillshade). Mexer aqui não muda o mapa, só a legenda.
     "cor_cinza_fora":       "#BFBFBF",
     "margem_enquadramento": 0.02,
+    # Figura de dois mapas (v3.2): espaço entre eles, em px a 300 dpi.
+    "espaco_dois_mapas_px": 90,
     # Teto de proporção largura/altura da figura quando o quadro é
     # reproporcionado ao recorte. 2.4 ainda cabe numa página de relatório.
     "aspecto_max":          2.4,
@@ -1088,7 +1093,8 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
                 ver_ucs_turma: bool = False,
                 ver_limite_turma: bool = False,
                 recorte: np.ndarray = None,
-                enquadramento: str = "area_estudo"):
+                enquadramento: str = "area_estudo",
+                cobertura: dict = None):
     """
     Monta a figura de relatório: hillshade + hipsometria + lâmina d'água,
     com legenda, barra de escala, seta norte e créditos de fonte.
@@ -1116,6 +1122,13 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
     um valor maior o traz de volta como fantasma). A máscara em si foi
     resolvida no domínio INTEIRO antes de chegar aqui (ver `mascara_recorte`) —
     o recorte é de relato, não de cálculo.
+
+    `cobertura` (v3.2): camada de biomas (MapBiomas) como fundo do mapa, no
+    lugar da hipsometria. Dict montado por quem chama (o motor não importa
+    `src/cobertura.py`, regra 5): {"classes": ndarray uint8 na grade do MDE,
+    "nodata": int, "cores": {código: "#RRGGBB"}, "legenda": [{"nome", "cor"}],
+    "alpha": float, "nota": str}. É camada VISUAL — não entra em conta nenhuma.
+    Sem esta camada o comportamento é o de sempre.
 
     Retorna (fig, ax) — quem chamou decide se salva ou exibe.
     """
@@ -1161,7 +1174,32 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
         alpha_dem = np.where(recorte, alpha_dem,
                              alpha_dem * CONFIG_MAPA["alpha_fora_recorte"])
 
-    if fundo == "hipsometrico":
+    usa_cob = (cobertura is not None
+               and np.shape(cobertura["classes"]) == np.shape(dem))
+    if cobertura is not None and not usa_cob:
+        _print("[COBERTURA] AVISO: grade da cobertura diferente da do MDE; "
+               "camada de biomas NÃO desenhada na figura.")
+
+    if usa_cob:
+        # Biomas no lugar da hipsometria: dois mapas de cor competiriam. O
+        # relevo continua legível porque a cor é modulada pelo hillshade.
+        # Tudo em uint8/float32 — uma RGBA float64 da grade (~5 M px) custa
+        # 160 MB e já derrubou o app no Cloud (ver a nota de memória do paleo).
+        arr = cobertura["classes"]
+        nod = cobertura["nodata"]
+        lut = np.zeros((256, 4), dtype=np.uint8)
+        for cod, cor in cobertura["cores"].items():
+            lut[int(cod), :3] = [int(cor[i:i + 2], 16) for i in (1, 3, 5)]
+            lut[int(cod), 3] = round(255 * cobertura.get("alpha", 0.9))
+        lut[nod, 3] = 0
+        rgba = lut[arr]
+        if recorte is not None:
+            rgba[~recorte, 3] = 0
+        mod = (0.55 + 0.45 * hs.astype(np.float32))
+        rgba[..., :3] = np.clip(rgba[..., :3] * mod[..., None], 0, 255).astype(np.uint8)
+        ax.imshow(rgba, interpolation="nearest")
+        del rgba, mod
+    elif fundo == "hipsometrico":
         # A escala de cor é calculada SÓ sobre o que vai aparecer: com recorte,
         # o platô do Grupo Barreiras fica de fora e não tem por que continuar
         # esticando a rampa (em Caravelas ele já gasta a faixa de cor toda).
@@ -1309,15 +1347,24 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
             itens.append(Patch(fc=item["cor_preenchimento"], alpha=item["alpha"],
                                ec=item["cor_borda"], label=item["rotulo"]))
 
+    # Biomas (v3.2): itens de classe entram na legenda. Só as classes que a
+    # interface listou (presentes dentro do recorte, acima do limiar mínimo).
+    if usa_cob:
+        for it in cobertura.get("legenda", []):
+            itens.append(Patch(fc=it["cor"], ec="none", label=it["nome"]))
+
     # Num quadro largo (área de estudo inteira) a caixa de legenda no canto
     # inferior direito cobre justamente o traçado do limite. Nesse caso ela sai
     # do mapa e vira uma faixa horizontal abaixo dele; no quadro estreito
-    # (planície) segue no canto, que é onde há mar vazio.
+    # (planície) segue no canto, que é onde há mar vazio. Com biomas a legenda
+    # tem 15+ itens e também vai para baixo.
     _largo = quadro is not None and (quadro[1] - quadro[0]) > 1.6 * (quadro[3] - quadro[2])
-    if _largo:
-        ax.legend(handles=itens, loc="upper left", bbox_to_anchor=(0.0, -0.02),
-                  ncol=min(len(itens), 3), fontsize=8, framealpha=0.9,
-                  borderaxespad=0.0)
+    _abaixo = _largo or usa_cob
+    leg = None
+    if _abaixo:
+        leg = ax.legend(handles=itens, loc="upper left", bbox_to_anchor=(0.0, -0.02),
+                        ncol=3 if _largo else 2, fontsize=8, framealpha=0.9,
+                        borderaxespad=0.0)
     else:
         ax.legend(handles=itens, loc="lower right", fontsize=8, framealpha=0.9)
 
@@ -1338,14 +1385,63 @@ def figura_mapa(dados_dem: dict, mascaras: dict, cota: dict,
         # desiste ("axes sizes collapsed to zero"). 110 caracteres cabem na
         # largura do eixo tanto na figura larga quanto na estreita.
         creditos += "\n" + textwrap.fill(aviso_recorte, width=110)
-    # Com a legenda embaixo do mapa (quadro largo), os créditos descem para
-    # não escrever por cima dela. O deslocamento é em fração do eixo, então
-    # acompanha a altura da figura sem número mágico em pixel.
-    _y_creditos = -0.028 - (CONFIG_MAPA["desloca_creditos_legenda"] if _largo else 0.0)
+    if usa_cob and cobertura.get("nota"):
+        creditos += "\n" + textwrap.fill(cobertura["nota"], width=110)
+    # Com a legenda embaixo do mapa, os créditos descem para não escrever por
+    # cima dela. A altura da legenda é MEDIDA (ela tem de 6 a 17 itens, então
+    # um deslocamento fixo não serve): desenha-se o canvas, lê-se a caixa da
+    # legenda em coordenadas do eixo e os créditos começam logo abaixo.
+    _y_creditos = -0.028
+    if leg is not None:
+        try:
+            fig.canvas.draw()
+            # Congela o layout DEPOIS de resolvido com a legenda e ANTES de
+            # existirem os créditos: se os créditos entrassem no
+            # constrained_layout, o eixo encolheria para abrir espaço e a
+            # legenda medida aqui deixaria de estar onde foi medida (os
+            # créditos escreveriam por cima dela). O `bbox_inches="tight"` do
+            # salvamento continua incluindo o texto no PNG.
+            try:
+                fig.set_layout_engine("none")
+            except AttributeError:   # matplotlib < 3.6
+                fig.set_constrained_layout(False)
+            _bb = leg.get_window_extent().transformed(ax.transAxes.inverted())
+            # Folga proporcional à altura da legenda: a altura de cada linha de
+            # texto arredonda diferente conforme o dpi do salvamento (prévia x
+            # 300 dpi), e numa legenda de 9 linhas isso acumula.
+            _y_creditos = _bb.y0 - 0.02 - 0.05 * _bb.height
+        except Exception:
+            _y_creditos = -0.028 - CONFIG_MAPA["desloca_creditos_legenda"]
     ax.text(0, _y_creditos, creditos, transform=ax.transAxes, fontsize=7,
             va="top", color=pal["texto_fraco"])
 
     return fig, ax
+
+
+def compor_lado_a_lado(png_a: bytes, png_b: bytes, cor_fundo: str = "#FFFFFF",
+                       espaco_px: int = None) -> bytes:
+    """
+    Junta dois PNG (as figuras já prontas de `figura_mapa`) lado a lado, alinhados
+    pelo topo, sobre `cor_fundo`. Compor imagens, em vez de desenhar dois eixos
+    numa figura só, reaproveita TUDO de `figura_mapa` (recorte, enquadramento,
+    legenda, créditos) sem duplicar lógica — e cada mapa mantém o próprio
+    título, cota e legenda. Cada PNG mantém a resolução com que foi gerado.
+    """
+    import io
+    from PIL import Image
+    a = Image.open(io.BytesIO(png_a)).convert("RGB")
+    b = Image.open(io.BytesIO(png_b)).convert("RGB")
+    esp = CONFIG_MAPA["espaco_dois_mapas_px"] if espaco_px is None else espaco_px
+    # O espaço é dado para 300 dpi; escala com a resolução real da imagem.
+    esp = int(esp * max(a.width, b.width) / 2400)
+    img = Image.new("RGB", (a.width + esp + b.width, max(a.height, b.height)),
+                    cor_fundo)
+    img.paste(a, (0, 0))
+    img.paste(b, (a.width + esp, 0))
+    saida = io.BytesIO()
+    img.save(saida, format="PNG", dpi=(CONFIG_MAPA["dpi_export"],) * 2)
+    _print(f"[EXPORT] Dois mapas compostos: {img.width}x{img.height} px")
+    return saida.getvalue()
 
 
 def salvar_figura(fig, prefixo: str, pasta: str = "saidas", dpi: int = None) -> str:

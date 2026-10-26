@@ -43,6 +43,8 @@ from __future__ import annotations
 
 import json
 
+import textwrap
+
 import numpy as np
 
 # =============================================================================
@@ -94,6 +96,10 @@ CONFIG_PALEO = {
     "lw_contorno": 1.3,
     "dpi_export": 300,
     "fracao_margem_quadro": 0.02,   # folga em volta do enquadramento, na figura
+    "aspecto_max": 2.4,             # teto largura/altura da figura reproporcionada
+    # Largura média de um caractere, em múltiplos do corpo da fonte — usada só
+    # para quebrar título, subtítulo e créditos na largura do mapa.
+    "largura_char_em": 0.56,
 
     # ENQUADRAMENTO PADRÃO. "dados" fecha no bbox do que foi classificado;
     # "quadro" mostra o retângulo inteiro das figuras do artigo. Enquadramento
@@ -392,6 +398,11 @@ def figura_paleo(core, dados_dem: dict, classes: np.ndarray, est: dict,
     # que aqui são o assunto — e em Caravelas ele gasta a faixa de cor toda nos
     # primeiros metros (decisão da v1.2). vmin/vmax vêm do tema: no escuro o
     # cinza é comprimido, senão o hillshade vira um continente branco estourado.
+    # O relevo fora do quadro de análise NÃO é desenhado (v3.2): o artigo não
+    # cobre aquela área e o FABDEM solto ali virava uma moldura cinza em volta
+    # do que importa. Fora do quadro fica o papel da figura.
+    if dentro_quadro is not None:
+        hs = np.where(dentro_quadro, hs, np.nan)
     ax.imshow(hs, cmap="gray", vmin=pal["hillshade_vmin"], vmax=pal["hillshade_vmax"],
               alpha=0.85, zorder=0)
 
@@ -442,15 +453,40 @@ def figura_paleo(core, dados_dem: dict, classes: np.ndarray, est: dict,
     for lado in ax.spines.values():
         lado.set_color(pal["borda"])
 
+    # Reproporciona a figura ao quadro, mantendo a MESMA área em polegadas —
+    # mesma lógica de `core.figura_mapa`. Com aspecto igual, um quadro mais
+    # alto que largo deixava o mapa estreito no meio de uma página larga.
+    if bb:
+        larg = (bb[1] - bb[0]) + 2 * mx
+        alt = (bb[3] - bb[2]) + 2 * mx
+        if larg > 0 and alt > 0:
+            razao = min(max(larg / alt, 1.0 / cfg["aspecto_max"]), cfg["aspecto_max"])
+            area_pol = float(figsize[0]) * float(figsize[1])
+            nova_larg = (area_pol * razao) ** 0.5
+            fig.set_size_inches(nova_larg, area_pol / nova_larg)
+            fig.subplots_adjust(left=0.02, right=0.98, top=0.88, bottom=0.14)
+    ax.apply_aspect()
+    # Largura REAL do mapa em polegadas: é ela que limita o texto. Título,
+    # subtítulo e créditos são quebrados para caber nela; antes eram linhas
+    # longas que alargavam o PNG (bbox "tight") com uma faixa vazia à direita.
+    larg_in = ax.get_position().width * fig.get_size_inches()[0]
+
+    def _quebra(txt: str, pt: float) -> str:
+        n = max(int(larg_in * 72 / (pt * cfg["largura_char_em"])), 30)
+        return "\n".join(textwrap.fill(par, width=n) for par in txt.split("\n"))
+
     nmrm = est.get("nmrm_m")
     sub = (f"{est.get('idade_rotulo', '')}"
            + (f" · NMRM {nmrm:+.1f} m" if isinstance(nmrm, (int, float)) else "")
            + " · reconstrução redesenhada de Andrade et al. (2003), "
              f"{est.get('figura', '')}")
-    ax.set_title(f"Paleoambiente de Caravelas — Estágio {est.get('estagio')}: "
-                 f"{est.get('titulo', '')}",
-                 fontsize=13, weight="bold", loc="left", pad=24, color=pal["texto"])
-    ax.text(0, 1.012, sub, transform=ax.transAxes, fontsize=8.5, color=pal["texto_fraco"])
+    sub = _quebra(sub, 8.5)
+    titulo = _quebra(f"Paleoambiente de Caravelas — Estágio {est.get('estagio')}: "
+                     f"{est.get('titulo', '')}", 13)
+    ax.set_title(titulo, fontsize=13, weight="bold", loc="left", color=pal["texto"],
+                 pad=14 + 11.5 * sub.count("\n") + 12)
+    ax.text(0, 1.012, sub, transform=ax.transAxes, fontsize=8.5, va="bottom",
+            color=pal["texto_fraco"])
 
     # Seta norte (a grade está em UTM, então norte é o topo) e barra de escala,
     # ambas em cor fixa: são conteúdo do mapa, não papel (regra do tema, v1.2).
@@ -472,11 +508,11 @@ def figura_paleo(core, dados_dem: dict, classes: np.ndarray, est: dict,
                 f"Terra de hoje: FABDEM V1-2 (Hawker et al. 2022), 30 m · análise "
                 f"restrita ao quadro da figura ({q['lon_min']:.2f}/{q['lon_max']:.2f}°W, "
                 f"{q['lat_min']:.2f}/{q['lat_max']:.2f}°); azul = mar nos dois "
-                f"momentos, cinza = fora da análise.\n"
+                f"momentos; sem cor = fora da análise.\n"
                 f"{FONTE_PALEO['precisao']}")
     if stats.get("area_perda_km2", 0.0) >= cfg["area_min_legenda_km2"]:
         creditos += ("\n\"Terra então, água hoje\" inclui a rede de canais de maré e o "
                      "estuário atuais — não é, por si, recuo de linha de costa.")
-    ax.text(0, -0.035, creditos, transform=ax.transAxes, fontsize=7,
+    ax.text(0, -0.02, _quebra(creditos, 7), transform=ax.transAxes, fontsize=7,
             va="top", color=pal["texto_fraco"])
     return fig, ax
