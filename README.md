@@ -1,373 +1,249 @@
 # Simulador de exposição ao NMRM — Caravelas (BA)
 
 Disciplina **Ecossistemas Marinhos Costeiros** — UERJ / FAOC / DOB
-(Prof. Filipe Chaves), semestre 2026.2.
+(Prof. Filipe Chaves), semestre 2026.2 · Projeto 26.09 · versão **v3.2**.
 
 **Pergunta do semestre:** como a elevação do Nível Médio Relativo do Mar
 (NMRM) poderá reorganizar os ecossistemas costeiros da planície de Caravelas,
 extremo sul da Bahia, e quais consequências ecológicas e sociais emergem
 dessa transformação?
 
+> Para entender o conceito do trabalho e como o app foi construído, comece por
+> [`docs/documentacao_basica.md`](docs/documentacao_basica.md). Este README
+> cobre instalação, execução, dados e licenças.
+
 ## O que a ferramenta faz
 
-Ferramenta geoespacial interativa e parametrizada de **exposição potencial**
-ao NMRM sobre a planície costeira de Caravelas. A partir do Modelo Digital de
-Elevação FABDEM V1-2 (~30 m), ela recorta, reprojeta e mascara o oceano,
-depois aplica uma cota de inundação composta (cenário IPCC AR6 + nível de
-sensibilidade) e classifica o terreno em **terra seca**, **inundada** (com
-caminho hidráulico até o mar) e **isolada** (abaixo da cota mas sem conexão).
+Ferramenta geoespacial interativa de **exposição potencial** ao NMRM sobre a
+planície costeira de Caravelas. A partir do Modelo Digital de Elevação FABDEM
+V1-2 (~30 m), ela aplica uma cota d'água composta (nível do mar + maré +
+sobrelevação) e classifica o terreno em **terra seca**, **inundada** (com
+caminho hidráulico até o mar) e **isolada** (abaixo da cota, mas sem conexão).
 O teste de **conectividade hidráulica** — ligado por padrão — é o principal
 diferencial frente aos simuladores online, que costumam somar como inundada
-qualquer depressão abaixo da cota. A saída inclui mapa hipsométrico sombreado,
-curva hipsométrica, curva de exposição área × cota, matriz de cenários e
-exports carimbados (PNG / GeoTIFF / CSV).
+qualquer depressão abaixo da cota.
 
 A saída é **exposição potencial, não previsão de inundação real**: não resolve
 hidrodinâmica, atenuação de maré no estuário, ondas, drenagem nem resposta
 morfodinâmica (acresção de manguezal, migração de duna).
 
+### As cinco páginas do app
+
+| Página | Para que serve |
+|---|---|
+| **Simulador** | Uso público: escolha o nível do mar (manual ou cenário IPCC AR6, este rotulado como nível *global*), a maré e as camadas; mapa interativo com leitura por clique. |
+| **Turma** | O mesmo simulador com os valores da disciplina pré-selecionados (+0,5 / +1 / +2 m), recorte à área de estudo da turma e análises por unidade de conservação. |
+| **Paleoambiente** | Os sete estágios da evolução quaternária da planície (Andrade et al. 2003) comparados com a terra emersa de hoje. |
+| **Exposição e cenários** | Curva de exposição (área × cota) e matriz de cenários. |
+| **Metadados** | Procedência dos dados, decomposição da cota e limitações declaradas. |
+
+Nas páginas Simulador e Turma, o botão **Gerar figura** monta a figura de
+300 dpi para o relatório. O botão **Formato da figura** escolhe entre **um mapa**
+ou **dois mapas lado a lado** (o segundo pode usar outra cota) e liga a camada
+de **biomas** (MapBiomas) em cada mapa.
+
 ## Estrutura de pastas
 
 ```
 nmrm-caravelas/
-├── CLAUDE.md                  # memória do projeto entre sessões
 ├── README.md
+├── CLAUDE.md                  # memória técnica do projeto (decisões e histórico)
 ├── LICENSE                    # CC BY-NC-SA 4.0
-├── requirements.txt           # pisos de versão para o Streamlit Cloud
-├── requirements-geracao.txt   # shapely: só p/ gerar dados_web/, NÃO é instalado no app
-├── .gitignore                 # ignora dados/ e saidas/ (dados_web/ é versionado)
+├── requirements.txt           # dependências do app (pisos de versão)
+├── requirements-geracao.txt   # dependências só dos scripts que geram dados_web/
+├── config.py                  # caminhos, bbox, CRS, nomes de arquivo — fonte única
 ├── .streamlit/config.toml     # tema e limites do app publicado
-├── .devcontainer/             # ambiente reproduzível
-├── config.py                  # caminhos, bbox, CRS, área da turma — fonte única
-├── .vscode/                   # launch.json + settings.json
+├── .devcontainer/, .vscode/   # ambiente reproduzível
 ├── src/
-│   ├── __init__.py
 │   ├── slr_core.py            # MOTOR — sem interface, toda a ciência
 │   ├── fonte_dados.py         # decide modo local x web, lê MDE e limiar
-│   ├── mapa_web.py            # camadas do mapa interativo (overlays, isolinhas, turma)
+│   ├── mapa_web.py            # camadas do mapa interativo
 │   ├── cobertura.py           # legenda MapBiomas Col. 11 + leitura do recorte
-│   └── correntes.py           # camada de correntes oceânicas (overlay, setas, leitura no clique)
+│   ├── correntes.py           # camada de correntes oceânicas (visual)
+│   └── paleo.py               # paleoambiente: comparação e figura
 ├── 01_mapa_elevacao.py        # mosaico/recorte/reprojeção FABDEM + mapa base
-├── 02_simulador_nmrm.py       # interface Streamlit sobre slr_core
+├── 02_simulador_nmrm.py       # interface Streamlit (as cinco páginas)
 ├── 03_prepara_dem_web.py      # gera os dados leves de dados_web/
 ├── 04_prepara_cobertura.py    # recorta o MapBiomas na grade do projeto
-├── 05_valida_cobertura_elevacao.py  # [diagnóstico] cobertura x elevação (FABDEM completo)
-├── 06_diagnostico_dossel.py   # [diagnóstico] viés de dossel sobre manguezal x "isolada"
+├── 05_…, 06_…                 # [diagnóstico] cobertura x elevação; viés de dossel
 ├── 07_mare_tpxo.py            # proveniência da maré TPXO9 (roda fora deste repo)
 ├── 08_prepara_camadas_turma.py  # regenera ucs_turma.geojson a partir do CNUC bruto
-├── 09_limite_turma.py         # converte o shapefile da área de estudo -> limite_turma.geojson
-├── 11_baixa_correntes.py      # baixa uo/vo mensais do CMEMS GLORYS12 (exige login CMEMS)
-├── 12_prepara_correntes.py    # climatologia + trimestres -> dados_web/correntes_caravelas.npz
-├── teste_sintetico_correntes.py  # valida o 12 com NetCDF falso; grava só em saidas/
-├── diagnostico_zeros.py       # [diagnóstico] os 0,0 m do FABDEM são todos oceano?
-├── histograma_cauda_costeira.py  # [diagnóstico] histograma fino da cauda inferior
-├── teste_sintetico.py         # valida o pipeline sem FABDEM; grava o MDE sintético em saidas/, NUNCA em processado/
-├── docs/
-│   ├── logica_da_ferramenta.md        # como a ferramenta raciocina, ponta a ponta
-│   ├── diagnostico_zeros.md           # investigação dos 0,0 m suspeitos no FABDEM
-│   └── validacao_mapbiomas_laudo.md   # cobertura x Laudo biológico do Cassurubá
-├── dados/                     # SÓ se NMRM_DIR_DADOS não estiver definida (ver "Onde ficam os dados")
-├── dados_web/                 # dados leves 30 m + camadas da turma + maré (VERSIONADO)
-└── saidas/                    # PNG, GeoTIFF, CSV (NÃO versionar)
+├── 09_limite_turma.py         # shapefile da área de estudo -> limite_turma.geojson
+├── 10_paleolinhas.py          # shapefiles dos 7 estágios -> paleolinhas_turma.geojson
+├── 11_baixa_correntes.py      # baixa correntes do CMEMS (exige login)
+├── 12_prepara_correntes.py    # climatologia + trimestres -> correntes_caravelas.npz
+├── diagnostico_zeros.py, histograma_cauda_costeira.py   # [diagnóstico]
+├── teste_sintetico.py, teste_sintetico_correntes.py     # validam os pipelines sem dados reais
+├── docs/                      # documentação (ver abaixo)
+├── dados_web/                 # dados leves VERSIONADOS (~5 MB) — o que o app publicado lê
+└── saidas/                    # PNG, GeoTIFF, CSV gerados (NÃO versionado)
 ```
 
-### Scripts de diagnóstico (não fazem parte do pipeline de produção)
+**Documentos em `docs/`:** `documentacao_basica.md` (conceito e construção do
+app), `logica_da_ferramenta.md` (como a ferramenta raciocina, ponta a ponta),
+`validacao_mapbiomas_laudo.md` (cobertura × laudo biológico do Cassurubá),
+`diagnostico_zeros.md` (investigação dos 0,0 m do FABDEM) e as imagens de
+validação do georreferenciamento e das paleolinhas.
 
-`05_valida_cobertura_elevacao.py`, `06_diagnostico_dossel.py`,
-`diagnostico_zeros.py` e `histograma_cauda_costeira.py` são **ferramentas de
-investigação**: só leem os dados, respondem uma pergunta específica e gravam
-relatório em `saidas/`. O app não os importa e nenhum produto de `dados_web/`
-depende deles; rodá-los ou não não muda nenhum número da ferramenta. O
-pipeline de produção é `01 → 03 → 04` (mais o `07`, o `08` e o `09`, que geram
-proveniência de maré, das camadas da turma e o limite único que o modo Turma
-usa como recorte).
+Os scripts `05`, `06`, `diagnostico_zeros.py` e `histograma_cauda_costeira.py`
+são **ferramentas de investigação**: só leem os dados e gravam relatório em
+`saidas/`. O app não os importa e nenhum produto de `dados_web/` depende deles.
 
 ## Como instalar
 
-```powershell
-# 1. Ambiente virtual
+```bash
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1          # Linux/macOS: source .venv/bin/activate
-
-# 2. Dependências
+source .venv/bin/activate          # Windows (PowerShell): .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-`teste_sintetico.py` roda o pipeline inteiro sobre um MDE sintético e não
-exige o download do FABDEM — útil para validar a instalação.
-
 ## Como rodar
 
-O simulador tem **modo duplo**. `src/fonte_dados.py` decide qual usar sem
-configuração manual: se `NMRM_DIR_DADOS` (ou `./dados/`) contém o MDE
-processado, roda em **modo local**; caso contrário, cai para o **modo web**
-usando `dados_web/`.
+O simulador tem **modo duplo**, escolhido sozinho por `src/fonte_dados.py`:
+se a pasta de dados (`NMRM_DIR_DADOS`, ou `./dados/`) contém o MDE processado,
+roda em **modo local**; caso contrário, cai para o **modo web**, que usa
+`dados_web/`.
 
-### Onde ficam os dados (`NMRM_DIR_DADOS`)
+**Se você só clonou o repositório, basta rodar:**
 
-Os dados pesados **não** ficam no repositório. `config.py` lê a variável de
-ambiente `NMRM_DIR_DADOS`; nesta máquina ela vale `C:\dados_nmrm`, e é lá que
-vivem `fabdem/` (tiles brutos), `auxiliar/` (MapBiomas nacional
-`brazil_coverage-col11_2025.tif`, o recorte de cobertura, `ucs_regiao.geojson`)
-e `processado/` (MDE e máscara de água). **Sem a variável**, o projeto cai
-para `dados/` dentro do repositório (pasta ignorada pelo git, recriada por
-`config.criar_estrutura()`); se você clonou o repositório e não definiu a
-variável, é nessa pasta que as entradas precisam estar. Nenhum script lê
-`dados/` do repositório quando `NMRM_DIR_DADOS` está definida.
-
-### Modo local — dados completos, flood-fill em tempo real
-
-Extensão inteira da planície em `float32`, com o teste de conectividade
-recalculado a cada movimento de controle. É o modo para trabalho de análise.
-
-```powershell
-# (opcional) dados fora de pasta sincronizada — os tiles FABDEM somam alguns GB.
-# Se o repositório estiver em OneDrive / Google Drive / Dropbox:
-$env:NMRM_DIR_DADOS = "C:\dados_nmrm"   # Linux/macOS: export NMRM_DIR_DADOS=~/dados_nmrm
-# Sem a variável, o projeto usa ./dados/.
-
-# 1. Pré-processamento do MDE (gera dados/processado/caravelas_fabdem_utm24s_30m.tif
-#    e a máscara de água caravelas_mascara_agua_utm24s_30m.tif)
-python 01_mapa_elevacao.py
-
-# 2. (opcional) regenerar os dados leves de dados_web/ a partir do MDE processado
-python 03_prepara_dem_web.py
-
-# 3. Simulador interativo
+```bash
 streamlit run 02_simulador_nmrm.py
 ```
+
+Isso já abre o app completo em modo web, sem baixar nenhum dado.
 
 ### Modo web — dados leves versionados (`dados_web/`)
 
-É o modo do deploy no **Streamlit Community Cloud** e roda em qualquer clone
-sem o download do FABDEM. `03_prepara_dem_web.py` produz, a partir do MDE
-processado, três rasters de 30 m recortados à planície: DEM em `int16`
-(centímetros), máscara de água, e um **raster de limiar de conexão
-hidráulica pré-computado** — cada pixel guarda a menor cota de mar em que
-passa a estar inundado *e* conectado ao oceano. Isso substitui o flood-fill
-em tempo real por uma consulta `limiar <= cota`, mantendo os mesmos números
-(validado pixel a pixel). O conjunto todo fica em ~2,3 MB.
+É o modo do deploy no Streamlit Community Cloud e roda em qualquer clone.
+`03_prepara_dem_web.py` produz, a partir do MDE processado, três rasters de
+30 m recortados à planície: DEM em `int16` (centímetros), máscara de água e um
+**raster de limiar de conexão hidráulica pré-computado** — cada pixel guarda a
+menor cota de mar em que passa a estar inundado *e* conectado ao oceano. Isso
+substitui o flood-fill em tempo real por uma consulta `limiar <= cota`,
+mantendo os mesmos números. Limite: o terreno acima de **+20 m** foi achatado,
+então cenários acima disso não são válidos nesse modo.
 
-```powershell
-# Basta ter dados_web/ no repositório (já versionado). Sem NMRM_DIR_DADOS:
-streamlit run 02_simulador_nmrm.py
-```
+### Modo local — dados completos (só para quem tem o FABDEM)
 
-No modo web o toggle "água pode entrar pelas bordas do recorte" fica
-desabilitado: seu valor foi fixado na geração dos dados leves. O terreno
-acima de **+20 m** foi achatado (teto) — cenários acima disso não são
-válidos nesse modo.
-
-### Pré-visualizar localmente a versão que vai ao público
-
-O resolvedor escolhe o modo sozinho: se o MDE completo existe, roda em local.
-Para ver na sua máquina exatamente a ferramenta que vai ao ar — mesmos dados
-leves, mesmo limiar pré-computado, mesmos controles bloqueados — force o modo
-com a variável `NMRM_MODO`:
-
-```powershell
-# Windows / PowerShell
-$env:NMRM_MODO = "web"
-streamlit run 02_simulador_nmrm.py
-
-# para voltar ao modo local
-Remove-Item Env:NMRM_MODO
-```
+Extensão inteira da planície em `float32`, com o teste de conectividade
+recalculado a cada movimento de controle. Os dados pesados ficam fora do
+repositório, na pasta apontada por `NMRM_DIR_DADOS` (subpastas `fabdem/`,
+`auxiliar/` e `processado/`):
 
 ```bash
-# Linux / macOS — vale só para este comando
-NMRM_MODO=web streamlit run 02_simulador_nmrm.py
+export NMRM_DIR_DADOS=~/dados_nmrm       # Windows: $env:NMRM_DIR_DADOS = "C:\dados_nmrm"
+python 01_mapa_elevacao.py               # gera o MDE processado e a máscara de água
+python 03_prepara_dem_web.py             # (opcional) regenera dados_web/
+streamlit run 02_simulador_nmrm.py
 ```
 
-A barra lateral mostra uma tarja **Pré-visualização do modo público** enquanto
-a variável está ligada, para não confundir controle bloqueado de propósito com
-bug. `NMRM_MODO=local` explicita o padrão; qualquer outro valor é ignorado com
-aviso no console.
+Sem a variável, o projeto usa `dados/` dentro do repositório (ignorada pelo git).
 
-O que muda no modo público: cenários IPCC AR6 fora do seletor, maré travada em
-NM, campo de caminho do MDE oculto, semeadura de bordas fixa (vem
-pré-computada no raster de limiar) e tema escuro nas figuras por padrão.
+Para ver na sua máquina exatamente a versão pública, force o modo web mesmo
+com os dados completos presentes: `NMRM_MODO=web streamlit run 02_simulador_nmrm.py`
+(no PowerShell: `$env:NMRM_MODO = "web"`).
 
 ### Deploy no Streamlit Community Cloud
 
-Aponte o app para `02_simulador_nmrm.py`. `requirements.txt` traz pisos de
-versão (não versões exatas), e `.streamlit/config.toml` fixa o tema escuro.
-Nenhuma variável de ambiente é necessária — a ausência de `NMRM_DIR_DADOS`
-já seleciona o modo web.
+Aponte o app para `02_simulador_nmrm.py`. O `requirements.txt` traz pisos de
+versão (não versões exatas) e `.streamlit/config.toml` fixa o tema. Nenhuma
+variável de ambiente é necessária: a ausência de `NMRM_DIR_DADOS` já seleciona
+o modo web.
 
-### Licença dos dados em `dados_web/`
-
-Os rasters de `dados_web/` são **produtos derivados do FABDEM V1-2** (Hawker
-et al. 2022) — recorte, mudança de tipo de dado e processamento de
-conectividade. Herdam a licença da fonte, **CC BY-NC-SA 4.0**: uso não
-comercial, atribuição obrigatória e compartilhamento pela mesma licença.
-Ver `dados_web/LICENSE.txt`. A licença do **código** deste repositório é
-declarada à parte, no `LICENSE` da raiz.
-
-## Como obter os dados
+## Como obter os dados (só para regenerar produtos)
 
 **FABDEM V1-2** (Hawker et al. 2022) — MDE principal.
+Página do dataset: <https://data.bris.ac.uk/data/dataset/s5hqmjcdj8yo2ibzi9b4ew3sn>
+(DOI <https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn>). Aceite a licença
+CC BY-NC-SA 4.0, baixe o bloco **`S20W040-S10W030_FABDEM_V1-2.zip`** e extraia
+para `fabdem/` os tiles de 1°×1° `S18W040`, `S18W039` e `S19W040`
+(`S19W039` é opcional: quase todo oceânico). Os tiles **não** são versionados —
+redistribuí-los violaria a cláusula NonCommercial/ShareAlike.
 
-1. Abra a página do dataset:
-   <https://data.bris.ac.uk/data/dataset/s5hqmjcdj8yo2ibzi9b4ew3sn>
-   (DOI: <https://doi.org/10.5523/bris.s5hqmjcdj8yo2ibzi9b4ew3sn>)
-2. Aceite a licença **CC BY-NC-SA 4.0** e baixe o bloco de 10°×10°
-   **`S20W040-S10W030_FABDEM_V1-2.zip`**, que contém Caravelas (~17,7°S / 39,2°W).
-   Link direto:
-   <https://data.bris.ac.uk/datasets/s5hqmjcdj8yo2ibzi9b4ew3sn/S20W040-S10W030_FABDEM_V1-2.zip>
-3. Extraia para `fabdem/` da pasta de dados (`NMRM_DIR_DADOS/fabdem`) os tiles de 1°×1° que intersectam o recorte:
-   `S18W040`, `S18W039`, `S19W040` (o `S19W039` é opcional e pode não existir —
-   é área quase toda oceânica).
+**MapBiomas Coleção 11 (2025).** Baixe o mosaico nacional
+`brazil_coverage-col11_2025.tif` em <https://brasil.mapbiomas.org>, coloque em
+`auxiliar/` da pasta de dados e rode `python 04_prepara_cobertura.py`. O script
+recorta Caravelas com reamostragem *nearest* (dado categórico) e grava o recorte
+alinhado à grade do MDE. A camada é **apenas visual**.
 
-Os diretórios `dados/` e `saidas/` **não são versionados**: redistribuir os
-tiles FABDEM no repositório violaria a cláusula NonCommercial/ShareAlike.
-
-Bases auxiliares (GEBCO 2025, constantes harmônicas BNDO/CHM): ver seção 4 do
-`CLAUDE.md`.
-
-**MapBiomas.** Baixe o mosaico nacional de cobertura da Coleção 11
-(`brazil_coverage-col11_2025.tif`) em <https://brasil.mapbiomas.org>, coloque em
-`auxiliar/` da pasta de dados (`$env:NMRM_DIR_DADOS/auxiliar`, ou `dados/auxiliar/`
-sem a variável) e rode. O `04` procura o arquivo **só** ali; ausente, ele para
-com um erro que diz onde o arquivo deveria estar:
-
-```bash
-python 04_prepara_cobertura.py
-```
-
-O script lê apenas a janela de Caravelas do arquivo nacional, reprojeta com
-reamostragem *nearest* (dado categórico) e grava o recorte alinhado à grade do
-MDE, em `dados/auxiliar/` e em `dados_web/`. A camada aparece no mapa
-interativo; se o recorte não existir, o controle fica desligado e a simulação
-segue normalmente.
-
-**Correntes oceânicas (CMEMS GLORYS12, 2016–2025, camada visual).** Médias
-mensais de `uo`/`vo` do produto GLOBAL_MULTIYEAR_PHY_001_030 (grade de 1/12°),
-baixadas por `11_baixa_correntes.py` (exige conta gratuita em
-<https://data.marine.copernicus.eu>) e reduzidas por `12_prepara_correntes.py`
-a climatologia e trimestres JFM/AMJ/JAS/OND, em 4 profundidades. O produto leve
-é `dados_web/correntes_caravelas.npz`. É **modelo assimilativo, não medição**, e
-não entra em nenhuma conta de exposição.
+**Correntes oceânicas (CMEMS GLORYS12, 2016–2025).** `11_baixa_correntes.py`
+(exige conta gratuita em <https://data.marine.copernicus.eu>) e
+`12_prepara_correntes.py` produzem `dados_web/correntes_caravelas.npz`. É
+**modelo assimilativo, não medição**, e não entra em nenhuma conta de exposição.
 
 > Generated using E.U. Copernicus Marine Service Information;
 > <https://doi.org/10.48670/moi-00021>
 
-## Novidades da v1.3
+**Camadas da turma.** O limite da área de estudo e as paleolinhas são trabalho
+manual da turma no QGIS, versionado em `dados_web/fonte_limite_turma/` e
+`dados_web/fonte_paleolinhas/` — não se regeneram a partir de fonte externa.
+As UCs vêm do CNUC (ICMBio/MMA, 07/2026) e as isóbatas da Batimetria do Brasil
+(CPRM/ANP 2013); detalhes em `CLAUDE.md` §4.
 
-- **O mapa interativo virou a aba principal.** A figura de 300 dpi passou para a
-  segunda aba e continua sendo o produto do relatório.
-- **Camada topográfica gerada do próprio FABDEM.** Hipsométrico em 11 faixas
-  (0,5 m de degrau nas cotas baixas) mais isolinhas de
-  0,5 / 1 / 2 / 3 / 5 / 10 / 20 m. Nenhum basemap topográfico de terceiros: o
-  relevo exibido é o mesmo que a simulação corta. Os dois toggles — topografia
-  e isolinhas — vêm **desligados por padrão** na seção "5 · Camadas do mapa
-  interativo"; o usuário liga quando quiser.
-- **Clique lê o ponto, num balão sobre ele.** Coordenada, cota FABDEM sem
-  interpolação, faixa hipsométrica, situação naquela cota (inundada / isolada /
-  acima), quantos metros faltam para alagar e classe de cobertura do MapBiomas.
-  Clicar sobre manguezal acrescenta o aviso de viés de dossel. As mesmas
-  informações aparecem em métricas abaixo do mapa.
-- **Camada MapBiomas Coleção 11 (2025)**, com legenda oficial conferida.
-  Nesta versão é **apenas visual** — não entra em nenhum cálculo.
-  Gerada por `python 04_prepara_cobertura.py`.
-- **Os mapas cabem numa tela.** Altura do mapa interativo e largura da figura
-  estática viraram controles da barra lateral.
-- **Validação da cobertura contra o Laudo biológico do Cassurubá**
-  (`docs/validacao_mapbiomas_laudo.md`) — e, dela, o achado abaixo.
-
-> ⚠️ **Viés de dossel sobre manguezal.** O cruzamento FABDEM × MapBiomas mostrou
-> o mangue em cota mediana de **4,31 m** e o apicum em **1,91 m** — ordem
-> invertida em relação à zonação de maré, que põe a planície hipersalina *acima*
-> da floresta de mangue. O resíduo de dossel sobre mangue é da ordem de 3 m,
-> maior que todo o NMRM projetado para 2100. Consequência prática: a ferramenta
-> **subestima** a exposição do manguezal, e área de mangue perdida por cenário
-> não deve ser reportada enquanto isso não for tratado. O apicum, sem dossel,
-> mede certo e responde como esperado (56 % abaixo de +2 m).
-
-## Novidades da v1.2
-
-Ajustes vindos da apresentação ao grupo:
-
-- **Modo Manual até +10 m.** O teto é recalculado em execução contra o
-  alcance do raster de limiar e contra o `clamp_m` do MDE leve. Acima de
-  +3 m a interface avisa que a simulação saiu da faixa projetada pelo AR6
-  (máx. +1,60 m em 2100, SSP5-8.5 de baixa confiança, p83) e passa a valer
-  como teste de sensibilidade do terreno — ou comparação com os paleoníveis
-  holocênicos da própria planície (+4,8 / +3,5 / +2,5 m, Andrade et al. 2003).
-- **"Área mínima de mancha" agora explicada na interface.** Filtro de ruído
-  do MDE: descarta cada mancha contígua (vizinhança 8) menor que o valor
-  informado, nas duas classes — inundada e depressão isolada. Na grade de
-  30 m, 1 pixel = 0,09 ha.
-- **Relevo sombreado virou o fundo padrão**, com o hipsométrico como opção
-  secundária.
-- **Maré travada no nível médio na ferramenta pública (modo web).** PM, PMS
-  e HAT continuam visíveis, porém desabilitados, com o aviso "Demais níveis
-  de maré em desenvolvimento". No modo local o seletor segue editável.
-- **Procedência declarada na aba Metadados:** de onde vêm os cenários AR6 e
-  o que significa exatamente "nível médio" nesta ferramenta.
-- **Ferramenta pública mais enxuta.** No modo web o seletor de cenário
-  oferece só *Níveis da turma* e *Manual* — os cenários IPCC AR6 aparecem
-  como "em desenvolvimento", porque os valores em `CENARIOS_AR6` ainda são
-  globais (NMGM) e não o NMRM local de Caravelas. O campo de caminho do MDE
-  também some: lá o raster é o `dados_web/` versionado com o app.
-- **Tema escuro.** A aplicação publicada usa paleta preto azulado
-  (`.streamlit/config.toml`). As figuras têm toggle próprio — **Tema escuro
-  nas figuras** — com padrão escuro no modo web e claro no modo local, que é
-  de onde saem os PNG do relatório. O tema muda apenas o papel da figura;
-  as cores de inundação, depressão isolada e oceano são as mesmas nos dois
-  temas, para o mapa da tela e o do relatório serem lidos igual.
-
-## Estado atual e limitações conhecidas
+## Limitações conhecidas
 
 - **O "nível médio" é herdado, não calculado.** O corte é feito em z = 0 m no
-  datum vertical do próprio FABDEM (geoide EGM2008): assume-se
-  `NM local ≈ geoide`, com `OFFSET_GEOIDE_NM_M = 0.00`. A diferença real é a
-  topografia dinâmica média (MDT) — decimétrica no Atlântico Sul tropical,
-  portanto da mesma ordem do NMRM projetado para 2050.
-- **Os valores SSP não foram calculados aqui.** Vêm da Tabela 9.9 do IPCC AR6
-  WGI Cap. 9 (Fox-Kemper et al. 2021): NMGM, mediana e faixa provável 17–83 %,
-  base 1995–2014. São **globais**; os valores locais de Caravelas devem sair
-  do NASA/IPCC AR6 Sea Level Projection Tool.
-- **Amarração vertical ao datum da DHN ainda pendente.** O FABDEM usa datum
-  vertical EGM2008; a diferença para a superfície média do mar real (MDT)
-  segue desconhecida, e `OFFSET_GEOIDE_NM_M` continua em `0.00`.
-- **Maré: TPXO9-atlas v5, não mais placeholder (22/09/2026).** Os campos de
-  `NIVEIS_MARE` (NM/PMQ/PM/PMS/HAT) deixaram de estar em `0.00` com flag
-  `PROVISORIO = True` — agora vêm do TPXO9-atlas v5 (OSU), extraído por
-  `07_mare_tpxo.py`. Continua sendo **modelo, não medição de marégrafo**
-  (`NIVEIS_MARE["MEDIDA"] = False`), com ponto AO LARGO da barra (célula de
-  ~3,7 km — não resolve o estuário) e **sem** resolver o item anterior (o
-  datum vertical do MDE é problema independente). A solicitação de
-  constantes harmônicas de **marégrafo** ao **BNDO/CHM**
-  (`chm.bndo@marinha.mil.br`) é caminho crítico e **ainda não foi feita** —
-  é a única fonte que tornaria `MEDIDA = True`. Nenhum valor de maré, datum
-  ou projeção local é inventado — se o dado não chegou, permanece `0.00`
-  sinalizado.
-- **Viés do FABDEM sobre manguezal.** O FABDEM remove dossel e edificações
-  por machine learning, mas em manguezal denso o resíduo de altura de árvore
-  ainda pode superar o próprio sinal de NMRM simulado. Não substituir por
-  SRTM / Copernicus GLO-30 bruto / Terrain-RGB: nesse terreno o problema
-  seria maior.
-- **Máscara de água incompleta em rios estreitos.** A conectividade
-  hidráulica propaga a partir dos pixels de oceano/estuário codificados como
-  `0.0` exato no FABDEM. Canais e gamboas com menos de ~1 pixel de largura
-  podem não estar nessa máscara, subestimando a via de propagação estuário
-  adentro.
-- **Cruzamento com MapBiomas ainda não implementado** (Parte 2 — resposta
-  ecológica). A v1 entrega só a camada física de exposição.
-- Todo produto declara suas limitações no rodapé da figura e na aba de
-  metadados. Distinguir sempre **NMGM** (média global do mar) de **NMRM**
-  (relativo local).
+  datum vertical do FABDEM (geoide EGM2008): assume-se `NM local ≈ geoide`
+  (`OFFSET_GEOIDE_NM_M = 0,00`). A diferença real é a topografia dinâmica média,
+  decimétrica no Atlântico Sul tropical — da mesma ordem do NMRM de 2050.
+- **Os cenários SSP são globais (NMGM), não NMRM.** Vêm da Tabela 9.9 do IPCC
+  AR6 WGI Cap. 9 (Fox-Kemper et al. 2021) e não incluem movimento vertical da
+  terra nem efeitos regionais. A interface os rotula como globais; devem ser
+  substituídos pelos valores locais do NASA/IPCC AR6 Sea Level Projection Tool.
+- **A maré é de modelo, não de marégrafo.** Os datums (NM, PMQ, PM, PMS, HAT)
+  vêm do TPXO9-atlas v5 num ponto ao largo da barra (célula de ~3,7 km); não
+  resolvem o estuário Caravelas–Peruípe. O HAT é um limite superior estimado.
+  As constantes de marégrafo do BNDO/CHM ainda não foram solicitadas.
+- **Viés de dossel sobre manguezal.** O FABDEM põe o mangue em cota mediana de
+  4,31 m e o apicum em 1,91 m — ordem invertida em relação à zonação de maré.
+  O resíduo (~3 m) é maior que todo o NMRM projetado para 2100: a exposição do
+  manguezal sai **subestimada** e **não se deve reportar área de mangue perdida
+  por cenário**. Detalhes em `docs/validacao_mapbiomas_laudo.md`.
+- **Máscara de água incompleta em rios estreitos.** Canais com menos de ~1 pixel
+  de largura podem não estar na máscara, subestimando a via de propagação
+  estuário adentro.
+- **Paleoambiente é reconstrução, não simulação.** Os polígonos são redesenho
+  de figuras publicadas em 2003, com erro posicional da ordem de centenas de
+  metros. Compare estágios entre si; não cite como medida absoluta.
+- **Cruzamento com MapBiomas (Parte 2)** — resposta ecológica — ainda não está
+  implementado: a cobertura é só visual.
 
-## Citação e licença
+Todo produto declara suas limitações no rodapé da figura e na página Metadados.
+Distinga sempre **NMGM** (média global) de **NMRM** (relativo local).
 
-Modelo Digital de Elevação:
+## Histórico de versões
 
-> Hawker, L., Uhe, P., Paulo, L., Sosa, J., Savage, J., Sampson, C., Neal, J.
-> (2022). A 30 m global map of elevation with forests and buildings removed.
-> *Environmental Research Letters*, 17, 024016.
-> <https://doi.org/10.1088/1748-9326/ac4d4f>
+| Versão | Data | O que entrou |
+|---|---|---|
+| v1.2 | 09/2026 | Manual até +10 m, relevo sombreado, procedência dos cenários, tema escuro |
+| v1.3 | 09/2026 | Mapa interativo principal, topografia e isolinhas do FABDEM, clique lê o ponto, MapBiomas |
+| v2.0 | 09/2026 | Maré TPXO9, modos Turma/Livre, camadas da turma, recorte à área de estudo |
+| v2.1 | 01/10/2026 | Paleoambiente: sete estágios de Andrade et al. (2003) |
+| v3.0 | 02/10/2026 | Redesign em cinco páginas, figura sob demanda, cenários AR6 rotulados como globais |
+| v3.1 | 21/10/2026 | Camada de correntes oceânicas (CMEMS GLORYS12) |
+| v3.2 | 26/10/2026 | Figura de um ou dois mapas com biomas; figura do paleoambiente enquadrada na área de interesse |
 
-FABDEM V1-2 é distribuído sob **CC BY-NC-SA 4.0**. Este repositório adota a
-mesma licença (ver `LICENSE`): uso acadêmico e não comercial, com
-compartilhamento pela mesma licença.
+## Fontes, citação e licença
+
+| Dado | Fonte | Termos |
+|---|---|---|
+| MDE | FABDEM V1-2 — Hawker et al. (2022), *Environmental Research Letters* 17, 024016, <https://doi.org/10.1088/1748-9326/ac4d4f> | CC BY-NC-SA 4.0 |
+| Cenários | IPCC AR6 WGI Cap. 9 — Fox-Kemper et al. (2021) | citar a fonte |
+| Cobertura | MapBiomas Brasil, Coleção 11 (2025) | citar a fonte conforme os termos do MapBiomas |
+| Correntes | CMEMS GLOBAL_MULTIYEAR_PHY_001_030 (GLORYS12) | atribuição ao Copernicus Marine Service |
+| Maré | TPXO9-atlas v5 (OSU) — só as constantes derivadas estão no repositório | consultar os termos do OSU antes de redistribuir |
+| Paleolinhas | Andrade et al. (2003), *An Acad Bras Cienc* 75(3): 357-382 | redesenho de figuras publicadas; ver aviso abaixo |
+| UCs | CNUC 07/2026 (ICMBio/MMA) | dados públicos do governo federal |
+| Isóbatas | Batimetria do Brasil (CPRM/ANP 2013), derivada do GEBCO | citar a fonte |
+
+Os rasters de `dados_web/` são **produtos derivados do FABDEM** e herdam a
+licença CC BY-NC-SA 4.0 (ver `dados_web/LICENSE.txt`). O código deste
+repositório adota a mesma licença (ver `LICENSE`): uso acadêmico e não
+comercial, com compartilhamento pela mesma licença.
+
+> Os PNG em `dados_web/fonte_paleolinhas/georref/` são as figuras do artigo de
+> 2003 usadas para o georreferenciamento. Antes de tornar o repositório público,
+> confirme que a licença da revista permite a redistribuição das figuras; caso
+> contrário, remova os PNG e mantenha só os `.points`.
+
+Autor: Helio · Assistência: Claude.

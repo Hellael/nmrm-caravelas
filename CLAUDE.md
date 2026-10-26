@@ -478,6 +478,35 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
   muda o que entra no quadro. Para o relatório, as duas figuras juntas contam a
   história inteira — visão geral e detalhe.
 
+- **Figura sob demanda: um ou dois mapas, com biomas (v3.2, 26/10/2026).**
+  Pedido da turma antes da entrega final. (1) O popover "Formato da figura"
+  (ao lado do botão "Gerar figura") escolhe **Um mapa** (o formato de sempre) ou
+  **Dois mapas lado a lado**; no segundo, "Mapa 2 com outra cota" permite
+  comparar dois níveis (soma a mesma maré e sobrelevação do mapa 1), e
+  desligado ele repete a cota — o par típico é exposição | biomas.
+  (2) **Biomas = MapBiomas Col. 11** como fundo da figura, ligável em cada mapa
+  (`cobertura=` de `core.figura_mapa`). Substitui a hipsometria naquele mapa
+  (duas escalas de cor competiriam), modulada pelo hillshade para o relevo
+  continuar legível; com recorte, fora da área de estudo some do desenho e da
+  legenda. É camada VISUAL, não entra em conta nenhuma, e o rodapé repete o
+  alerta do viés de dossel no mangue (regras 3 e 6). O motor não importa
+  `src/cobertura.py`: a interface (`_pacote_cobertura`) monta o dict.
+  (3) Cada mapa é uma figura completa de `figura_mapa` e as duas são compostas em
+  PNG por `core.compor_lado_a_lado` — reaproveita recorte, enquadramento,
+  legenda e créditos sem duplicar lógica, e gera uma figura por vez (o pico de
+  memória não dobra). (4) Legenda de biomas (15+ itens) vai abaixo do mapa e os
+  créditos descem **medindo** a legenda: o layout é congelado
+  (`set_layout_engine("none")`) depois de resolvido com a legenda e antes dos
+  créditos existirem, senão o constrained_layout encolhe o eixo e os créditos
+  escrevem por cima dela. Não tirar esse congelamento numa refatoração.
+- **Figura do paleoambiente enquadrada na área de interesse (v3.2, 26/10/2026).**
+  Dois defeitos: (1) título, subtítulo e créditos eram linhas longas sem quebra, e
+  o `bbox_inches="tight"` alargava o PNG com uma faixa vazia à direita; agora
+  tudo é quebrado na largura REAL do mapa (`CONFIG_PALEO["largura_char_em"]`);
+  (2) o relevo do FABDEM aparecia fora do quadro de análise como moldura
+  cinza — agora só é desenhado dentro dele — e a figura é reproporcionada ao
+  enquadramento (mesma lógica de `figura_mapa`). Nenhum número mudou.
+
 ## 6. Estado atual
 
 > **Nomenclatura:** as tags publicadas são v1.0 … v1.3, v2.0, v2.1 e agora **v3.0**.
@@ -545,6 +574,19 @@ não usar; o `04` alinha à grade e usa a legenda oficial conferida.
       controles ao lado do mapa, figura de 300 dpi sob demanda, tema Rubik,
       cenários AR6 liberados no modo web com rótulo de nível GLOBAL. Ver §5.
 - [x] **v3.1** (21/10/2026) — camada de correntes oceânicas (CMEMS GLORYS12, média de 10 anos): `11_baixa_correntes.py` + `12_prepara_correntes.py` + `src/correntes.py`; no simulador, toggle "Correntes oceânicas" com Climatologia ou Por trimestre, seletor de profundidade, setas e leitura no clique. Escala de cor fixa por profundidade (períodos comparáveis). Rodado com dados REAIS em 21/10/2026 (4 níveis, n=120 na climatologia e n=30 por trimestre; `dados_web/correntes_caravelas.npz`, 850 KB); figura de conferência coerente (Corrente do Brasil no talude, mais forte em JFM e mais fraca em AMJ; vórtices da Cadeia Vitória–Trindade a 1062 m). `teste_sintetico_correntes.py` segue como teste do pipeline sem CMEMS. "Jun-Ago-Set" do pedido foi tratado como Jul-Ago-Set.
+- [x] **v3.2** (26/10/2026) — pedido final da turma: figura de um ou dois mapas
+      lado a lado com camada de biomas (MapBiomas) e figura do paleoambiente
+      enquadrada só na área de interesse. Ver §5. Conferido com dados reais
+      (`dados_web/`) e com `AppTest` do Streamlit (formato 2 + outra cota + biomas).
+- [x] **Revisão pré-publicação** (26/10/2026) — pasta revisada para a turma: nenhum segredo
+      nem caminho pessoal versionado; teste automático (`AppTest`) de todas as páginas, de
+      todos os cenários AR6 x horizontes x percentis, das 5 marés, do manual 0–10 m, do
+      recorte ligado/desligado e das figuras de 1 e 2 mapas — zero exceções; `pyflakes`
+      limpo; AR6 conferido contra reprodução secundária da Tabela 9.9 (as 4 linhas batem);
+      `README.md` reescrito (descrevia v1.x), `docs/logica_da_ferramenta.md` atualizado
+      (maré, AR6 rotulado como global, tarja) e `docs/documentacao_basica.md` criado.
+      Números de referência: a +2,00 m o recorte dá 24,04 km² com área mínima 0 ha e
+      23,02 km² com 1 ha (o 23,02 citado acima vem do padrão antigo de 1 ha).
 - [ ] Imagem de satélite de fundo (`contextily`, reprojeção para WebMercator).
 - [ ] Solicitação ao BNDO e integração da maré com constante de marégrafo.
       Passo intermediário dado em 22/09/2026: `NIVEIS_MARE` passou a vir do

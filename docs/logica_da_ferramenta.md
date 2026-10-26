@@ -1,7 +1,7 @@
 # A lógica por trás do simulador de NMRM — Caravelas (BA)
 
 **Projeto 26.09** · Ecossistemas Marinhos Costeiros — UERJ / FAOC / DOB
-Documento de apoio à apresentação · versão 1.2 · setembro de 2026
+Documento de apoio à apresentação · escrito na v1.2 (setembro de 2026) e revisado em 26/10/2026 para a v3.2
 
 ---
 
@@ -73,8 +73,9 @@ cota = NMRM (cenário) + maré (datum) + (nível médio − geoide) + sobreleva�
 
 A ferramenta mostra essa decomposição na aba **Metadados**, parcela por
 parcela, justamente para que ninguém cite um número sem saber o que ele
-contém. Na v1.2, três dessas quatro parcelas valem zero — e é importante
-saber **por quê**.
+contém. Por padrão, duas dessas quatro parcelas valem zero (a diferença entre o nível
+médio e o geoide, e a sobrelevação meteorológica, que é um campo opcional) —
+e é importante saber **por quê**.
 
 ### O que significa "nível médio" aqui
 
@@ -108,8 +109,9 @@ modelo global assimilado a altimetria de satélite e a marégrafos — não é
 uma medição em Caravelas — e a célula usada tem ~3,7 km, representando a
 condição **ao largo da barra**, não dentro dos canais do estuário
 Caravelas–Peruípe (amplificação e defasagem de maré no estuário não estão
-representadas). Por isso `NIVEIS_MARE["MEDIDA"] = False` continua exibindo
-tarja de aviso na interface — agora permanente, e por outro motivo.
+representadas). Por isso `NIVEIS_MARE["MEDIDA"] = False`, e a procedência (modelo, não medição)
+é declarada na página **Metadados** e na seção "O que esta ferramenta NÃO diz"
+da página Turma.
 
 Isso segue a regra de conduta nº 1 do projeto: **nunca inventar valor de
 maré, datum ou projeção local.** Antes disso significava manter tudo em
@@ -323,7 +325,7 @@ limite.
 **A conta a pagar:** a planície de Caravelas ocupa cerca de 8 % da largura
 desse quadro. Mostrar a área de estudo como ela é — quase toda plataforma —
 custa a leitura fina da exposição. Por isso o enquadramento é escolha, não
-decisão fixa: a barra lateral oferece **Área de estudo inteira** e **Só a
+decisão fixa: os **Ajustes avançados** oferecem **Área de estudo inteira** e **Só a
 planície (onde há MDE)**, com padrão na segunda. **Enquadramento não é
 recorte** — os dois contam exatamente os mesmos km², e o que muda é só o que
 entra no quadro. Num relatório, as duas juntas contam a história inteira: a
@@ -348,9 +350,10 @@ por nós** — a ferramenta apenas soma o valor à cota. O problema é que esses
 números são **NMGM, o nível médio GLOBAL**, e a disciplina pede **NMRM,
 relativo local**. Eles não incluem movimento vertical da terra, impressão
 digital gravitacional do degelo, nem variação estérica regional. Por isso,
-**na versão pública os cenários AR6 estão marcados como "em desenvolvimento"**:
-oferecer um valor global rotulado como cenário local seria o mesmo erro de
-inventar um datum. A substituição virá do NASA/IPCC AR6 Sea Level Projection
+**desde a v3.0 os cenários AR6 aparecem nas duas páginas de simulador, sempre
+rotulados como nível GLOBAL (NMGM)**, com o sufixo "(NMGM)" no nome do cenário:
+oferecer um valor global como se fosse local seria o mesmo erro de inventar um
+datum, então o que mudou foi declarar a procedência, não escondê-la. A substituição virá do NASA/IPCC AR6 Sea Level Projection
 Tool (Garner et al., Zenodo 10.5281/zenodo.5914709), no grid point de
 Caravelas.
 
@@ -402,7 +405,7 @@ Vale dizer isso em voz alta na apresentação, antes que perguntem:
 
 | Pendência | Por que importa |
 |---|---|
-| Constantes harmônicas do BNDO/CHM | Destrava PM, PMS e HAT. Caminho crítico. |
+| Constantes harmônicas do BNDO/CHM | Troca a maré de modelo (TPXO) pela de marégrafo e resolve o estuário. Caminho crítico. |
 | Offset geoide → nível médio local | Corrige o datum vertical na ordem de decímetros. |
 | NMRM local do AR6 Sea Level Tool | Substitui o global pelo relativo, que é o que a disciplina pede. |
 | Cruzamento com MapBiomas | Parte 2 — transforma exposição física em resposta ecológica. |
@@ -418,13 +421,15 @@ Vale dizer isso em voz alta na apresentação, antes que perguntem:
   In: *Climate Change 2021: The Physical Science Basis*. IPCC AR6 WGI, Cap. 9.
 - Garner, G. G. et al. (2021). IPCC AR6 Sea Level Projections.
   Zenodo, 10.5281/zenodo.5914709.
-- Andrade, A. C. S. et al. (2003). Evolução quaternária da planície costeira de
-  Caravelas, extremo sul da Bahia.
+- Andrade, A. C. S., Dominguez, J. M. L., Martin, L., Bittencourt, A. C. S. P.
+  (2003). Quaternary evolution of the Caravelas strandplain – Southern Bahia
+  State – Brazil. *Anais da Academia Brasileira de Ciências*, 75(3), 357-382.
 
 ---
 
-*Nota de revisão: os valores da Tabela 9.9 conferidos linha a linha até aqui
-são os do SSP5-8.5 (0,23 m em 2050; 0,77 m em 2100), verificados contra o
-Sumário Executivo do Capítulo 9. SSP1-2.6, SSP2-4.5 e SSP5-8.5 de baixa
-confiança ainda merecem conferência na tabela impressa antes de irem para o
-relatório final.*
+*Nota de revisão: o SSP5-8.5 (0,23 m em 2050; 0,77 m em 2100) foi verificado
+contra o Sumário Executivo do Capítulo 9. Em 26/10/2026 as quatro linhas da
+tabela do código (SSP1-2.6, SSP2-4.5, SSP5-8.5 e SSP5-8.5 baixa confiança)
+foram conferidas contra uma reprodução secundária da Tabela 9.9 (Hong Kong
+Observatory) e batem; falta conferir contra a tabela impressa do capítulo antes
+de citar no relatório final.*
