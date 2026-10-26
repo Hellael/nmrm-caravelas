@@ -132,8 +132,8 @@ def salvar_mapa_zeros(dem: np.ndarray, zeros: dict) -> str:
     ax.set_title("Diagnóstico — pixels ==0.0 antes da máscara de oceano",
                  fontsize=13, weight="bold", loc="left")
     ax.text(0, 1.01,
-            f"Azul = grupo (a) oceano aberto (conectado à borda leste) · "
-            f"Roxo = grupo (b) candidato a manguezal/maré/laguna/canal (isolado)",
+            "Azul = grupo (a) oceano aberto (conectado à borda leste) · "
+            "Roxo = grupo (b) candidato a manguezal/maré/laguna/canal (isolado)",
             transform=ax.transAxes, fontsize=9, va="bottom")
 
     legenda = [

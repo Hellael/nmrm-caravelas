@@ -565,7 +565,7 @@ def main():
     _print(f"[DOSSEL] offset empírico = {resultado_offset['offset_empirico_m']:.2f} m "
            f"(web: {resultado_offset['offset_web_referencia_m']:.2f} m, "
            f"diferença {resultado_offset['diferenca_vs_web_m']:+.2f} m)")
-    _print(f"[DOSSEL] tabela do item 4 (varredura de offset):")
+    _print("[DOSSEL] tabela do item 4 (varredura de offset):")
     with pd.option_context("display.width", 200, "display.max_columns", None):
         _print(df_varredura.to_string(index=False))
     _print(f"[DOSSEL] CSV: {caminho_csv}")

@@ -83,7 +83,7 @@ def processar(dir_entrada: Path, arq_saida: Path, dir_figuras: Path) -> int:
             return 1
         arquivos.append(arq)
 
-    U, V, CONST, prof_usada, n_meses_ref = [], [], [], [], None
+    U, V, CONST, prof_usada = [], [], [], []
     lat = lon = None
     meses_por_periodo = {}
     for prof_alvo, arq in zip(alvos, arquivos):
